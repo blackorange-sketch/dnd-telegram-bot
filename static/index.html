@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DnD Adventure</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: var(--tg-theme-bg-color, #17181c);
+    --text: var(--tg-theme-text-color, #f2f2f2);
+    --hint: var(--tg-theme-hint-color, #8b8b8f);
+    --btn: var(--tg-theme-button-color, #2ea6ff);
+    --btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --card: rgba(255, 255, 255, 0.06);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  body {
+    padding: 16px;
+    padding-top: calc(16px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  #status {
+    font-size: 14px;
+    color: var(--hint);
+    margin-bottom: 14px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #rollResult {
+    margin-bottom: 12px;
+  }
+  .roll-card {
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--card);
+    font-size: 15px;
+  }
+  #story {
+    white-space: pre-wrap;
+    line-height: 1.55;
+    font-size: 16px;
+    margin-bottom: 18px;
+    min-height: 40px;
+  }
+  #inventory {
+    font-size: 13px;
+    color: var(--hint);
+    margin-bottom: 16px;
+  }
+  .btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 12px 14px;
+    margin: 6px 0;
+    border: none;
+    border-radius: 12px;
+    background: var(--btn);
+    color: var(--btn-text);
+    font-size: 15px;
+    cursor: pointer;
+  }
+  .btn:active { opacity: 0.8; }
+  #textRow {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  #freeText {
+    flex: 1;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--hint);
+    background: transparent;
+    color: var(--text);
+    font-size: 15px;
+  }
+  #sendBtn {
+    padding: 0 16px;
+    border: none;
+    border-radius: 10px;
+    background: var(--btn);
+    color: var(--btn-text);
+    font-size: 18px;
+  }
+  #diceBtn {
+    background: transparent;
+    border: 1px solid var(--hint);
+    color: var(--text);
+  }
+</style>
+</head>
+<body>
+  <div id="status"></div>
+  <div id="rollResult"></div>
+  <div id="story">Завантаження...</div>
+  <div id="inventory"></div>
+  <div id="options"></div>
+  <button class="btn" id="diceBtn" onclick="sendManualRoll()">🎲 Кинути d20</button>
+  <div id="textRow">
+    <input id="freeText" placeholder="Опиши свою дію..." onkeydown="if(event.key==='Enter') sendFreeText()">
+    <button id="sendBtn" onclick="sendFreeText()">➤</button>
+  </div>
+
+<script>
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+const initData = tg.initData;
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ initData, ...body }),
+  });
+  return res.json();
+}
+
+function renderStatus(character) {
+  const el = document.getElementById("status");
+  if (!character) { el.textContent = ""; return; }
+  let parts = [`❤️ ${character.hp ?? "?"}/${character.max_hp ?? "?"}`];
+  if (character.money) parts.push(`💰 ${character.money}`);
+  el.textContent = parts.join("   ");
+}
+
+function renderInventory(character) {
+  const el = document.getElementById("inventory");
+  const items = character && character.inventory;
+  if (!items || !items.length) { el.textContent = ""; return; }
+  el.textContent = "🎒 " + items.join(", ");
+}
+
+function renderStory(text) {
+  document.getElementById("story").textContent = text || "";
+}
+
+function renderOptions(options) {
+  const el = document.getElementById("options");
+  el.innerHTML = "";
+  (options || []).forEach((opt, i) => {
+    const btn = document.createElement("button");
+    btn.className = "btn";
+    btn.textContent = (i + 1) + ") " + opt.text + (opt.requires_roll ? " 🎲" : "");
+    btn.onclick = () => sendChoice(i + 1);
+    el.appendChild(btn);
+  });
+}
+
+const TIER_LABEL = {
+  critical_failure: "💥 Фатальна невдача",
+  failure: "❌ Невдача",
+  partial_success: "➖ Частковий успіх",
+  success: "✅ Успіх",
+  critical_success: "🌟 Критичний успіх",
+};
+
+function renderRoll(roll) {
+  const el = document.getElementById("rollResult");
+  if (!roll) { el.innerHTML = ""; return; }
+  const penaltyText = roll.penalty ? ` (штраф ${roll.penalty})` : "";
+  el.innerHTML = `<div class="roll-card">🎲 d${roll.sides}: ${roll.value}${penaltyText} → підсумок ${roll.total}<br>${TIER_LABEL[roll.tier] || roll.tier}</div>`;
+}
+
+function setLoading() {
+  renderRoll(null);
+  document.getElementById("options").innerHTML = "";
+  renderStory("...");
+}
+
+async function loadState() {
+  const data = await api("/api/state", {});
+  if (data.error) {
+    renderStory(
+      data.error === "no_active_game"
+        ? "Немає активної пригоди. Почни /new в чаті з ботом."
+        : "Не вдалося авторизуватись. Відкрий цю сторінку через кнопку в боті."
+    );
+    return;
+  }
+  renderStatus(data.character);
+  renderInventory(data.character);
+  renderStory(data.text);
+  renderOptions(data.options);
+}
+
+function handleActionResult(data) {
+  if (data.error) {
+    renderStory("Помилка: " + (data.detail || data.error));
+    return;
+  }
+  renderRoll(data.roll);
+  renderStatus(data.character);
+  renderInventory(data.character);
+  renderStory(data.text);
+  renderOptions(data.options);
+  if (data.defeated) {
+    document.getElementById("story").textContent += "\n\n💀 Персонаж втратив свідомість.";
+  }
+}
+
+async function sendChoice(index) {
+  setLoading();
+  const data = await api("/api/action", { type: "choice", index });
+  handleActionResult(data);
+}
+
+async function sendManualRoll() {
+  setLoading();
+  const data = await api("/api/action", { type: "roll", sides: 20 });
+  handleActionResult(data);
+}
+
+async function sendFreeText() {
+  const input = document.getElementById("freeText");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  setLoading();
+  const data = await api("/api/action", { type: "text", text });
+  handleActionResult(data);
+}
+
+loadState();
+</script>
+</body>
+</html>
