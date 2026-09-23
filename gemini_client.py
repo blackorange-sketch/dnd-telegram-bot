@@ -238,6 +238,45 @@ def generate_story_turn(
     return response.text.strip()
 
 
+def generate_world_preview(category_label: str, category_hint: str, language_name: str) -> str:
+    """A short, standalone world concept the player can accept or reroll —
+    not part of the actual adventure yet, so no STATE tag or options here."""
+    prompt = (
+        f"Respond in: {language_name}.\n\n"
+        "For THIS response only, ignore the closing STATE tag rule and the numbered-options "
+        "rule — just answer with the requested text and nothing else.\n\n"
+        f"Propose a short, evocative world concept (3-5 sentences) for a {category_label} "
+        f"({category_hint}) adventure. Give it a distinct hook or twist so it doesn't feel generic."
+    )
+    model = get_model()
+    response = model.generate_content(prompt)
+    return response.text.strip()
+
+
+def generate_character_preview(
+    gender: str,
+    age: str,
+    world_description: str | None,
+    category_hint: str,
+    language_name: str,
+) -> str:
+    """A short, standalone character concept the player can accept or
+    reroll — not part of the actual adventure yet."""
+    world_part = f"World: {world_description}" if world_description else f"World category hint: {category_hint}"
+    prompt = (
+        f"Respond in: {language_name}.\n\n"
+        "For THIS response only, ignore the closing STATE tag rule and the numbered-options "
+        "rule — just answer with the requested text and nothing else.\n\n"
+        f"{world_part}\n\n"
+        f"Propose a short character concept (3-5 sentences) fitting this world: gender — "
+        f"{gender}, age — {age}. Include a name, class/profession, one notable trait, and a "
+        "one-line backstory hook."
+    )
+    model = get_model()
+    response = model.generate_content(prompt)
+    return response.text.strip()
+
+
 def generate_new_adventure_opening(
     category_label: str,
     category_hint: str,

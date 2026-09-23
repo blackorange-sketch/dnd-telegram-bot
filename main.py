@@ -53,10 +53,12 @@ class Creation(StatesGroup):
     choosing_language = State()
     choosing_category = State()
     entering_world_description = State()
+    previewing_world = State()
     choosing_character_method = State()
     entering_character_description = State()
     choosing_gender = State()
     entering_age = State()
+    previewing_character = State()
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +82,13 @@ def category_keyboard(lang_key: str) -> InlineKeyboardMarkup:
 def world_description_keyboard(lang_key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=ui.t(lang_key, "world_random_button"), callback_data="world:random")],
+    ])
+
+
+def preview_keyboard(lang_key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=ui.t(lang_key, "preview_regen_button"), callback_data="preview:regen")],
+        [InlineKeyboardButton(text=ui.t(lang_key, "preview_accept_button"), callback_data="preview:accept")],
     ])
 
 
@@ -247,10 +256,43 @@ async def process_world_description_text(message: Message, state: FSMContext):
 
 @dp.callback_query(Creation.entering_world_description, F.data == "world:random")
 async def process_world_description_random(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await clear_keyboard(callback)
+    await state.set_state(Creation.previewing_world)
+    await show_world_preview(callback.message, state)
+
+
+async def show_world_preview(message: Message, state: FSMContext):
     data = await state.get_data()
     lang_key = data.get("language_key", lang.DEFAULT_LANGUAGE)
-    await state.update_data(world_description=None)
-    await callback.answer(ui.t(lang_key, "world_random_ack"))
+    category_key = data.get("category_key", random.choice(wc.all_keys()))
+    generating_msg = await message.answer(ui.t(lang_key, "generating_preview"))
+    try:
+        preview = gemini_client.generate_world_preview(
+            category_label=wc.label_for(category_key, lang_key),
+            category_hint=wc.hint_for(category_key),
+            language_name=lang.prompt_name_for(lang_key),
+        )
+    except Exception as e:
+        logger.exception("Gemini error")
+        await generating_msg.edit_text(ui.t(lang_key, "gemini_error", error=e))
+        return
+    await state.update_data(world_preview=preview)
+    await generating_msg.edit_text(preview, reply_markup=preview_keyboard(lang_key))
+
+
+@dp.callback_query(Creation.previewing_world, F.data == "preview:regen")
+async def regen_world_preview(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await clear_keyboard(callback)
+    await show_world_preview(callback.message, state)
+
+
+@dp.callback_query(Creation.previewing_world, F.data == "preview:accept")
+async def accept_world_preview(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(world_description=data.get("world_preview"))
+    await callback.answer()
     await clear_keyboard(callback)
     await ask_character_method(callback.message, state)
 
@@ -284,7 +326,7 @@ async def process_character_method(callback: CallbackQuery, state: FSMContext):
 @dp.message(Creation.entering_character_description)
 async def process_character_description(message: Message, state: FSMContext):
     await state.update_data(character_description=message.text)
-    await finalize_creation(message, state)
+    await finalize_creation(message, message.from_user.id, state)
 
 
 @dp.callback_query(Creation.choosing_gender, F.data.startswith("gender:"))
@@ -302,14 +344,52 @@ async def process_gender(callback: CallbackQuery, state: FSMContext):
 @dp.message(Creation.entering_age)
 async def process_age(message: Message, state: FSMContext):
     await state.update_data(age=message.text)
-    await finalize_creation(message, state)
+    await state.set_state(Creation.previewing_character)
+    await show_character_preview(message, state)
+
+
+async def show_character_preview(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang_key = data.get("language_key", lang.DEFAULT_LANGUAGE)
+    category_key = data.get("category_key")
+    generating_msg = await message.answer(ui.t(lang_key, "generating_preview"))
+    try:
+        preview = gemini_client.generate_character_preview(
+            gender=data.get("gender", "any"),
+            age=data.get("age", "any"),
+            world_description=data.get("world_description"),
+            category_hint=wc.hint_for(category_key) if category_key else "",
+            language_name=lang.prompt_name_for(lang_key),
+        )
+    except Exception as e:
+        logger.exception("Gemini error")
+        await generating_msg.edit_text(ui.t(lang_key, "gemini_error", error=e))
+        return
+    await state.update_data(character_preview=preview)
+    await generating_msg.edit_text(preview, reply_markup=preview_keyboard(lang_key))
+
+
+@dp.callback_query(Creation.previewing_character, F.data == "preview:regen")
+async def regen_character_preview(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await clear_keyboard(callback)
+    await show_character_preview(callback.message, state)
+
+
+@dp.callback_query(Creation.previewing_character, F.data == "preview:accept")
+async def accept_character_preview(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(character_description=data.get("character_preview"))
+    await callback.answer()
+    await clear_keyboard(callback)
+    await finalize_creation(callback.message, callback.from_user.id, state)
 
 
 # ---------------------------------------------------------------------------
 # Final step: call Gemini and start the adventure
 # ---------------------------------------------------------------------------
 
-async def finalize_creation(message: Message, state: FSMContext):
+async def finalize_creation(message: Message, user_id: int, state: FSMContext):
     data = await state.get_data()
     lang_key = data.get("language_key", lang.DEFAULT_LANGUAGE)
     language_name = lang.prompt_name_for(lang_key)
@@ -362,7 +442,7 @@ async def finalize_creation(message: Message, state: FSMContext):
 
     display_text, options = format_options(clean_text, lang_key)
 
-    game = GameState(user_id=message.from_user.id, character=character_record, language=lang_key)
+    game = GameState(user_id=user_id, character=character_record, language=lang_key)
     game.add_turn(f"[DM]: {clean_text}")
     game.pending_options = options
     save_state(game)

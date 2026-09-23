@@ -49,6 +49,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "tier_partial_success": "Частковий успіх",
         "tier_success": "Успіх",
         "tier_critical_success": "Критичний успіх",
+        "preview_regen_button": "🔄 Згенерувати ще раз",
+        "preview_accept_button": "✅ Підходить, далі",
+        "generating_preview": "Генерую варіант...",
     },
     "en": {
         "start": (
@@ -96,6 +99,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "tier_partial_success": "Partial success",
         "tier_success": "Success",
         "tier_critical_success": "Critical success",
+        "preview_regen_button": "🔄 Generate another",
+        "preview_accept_button": "✅ Works for me, continue",
+        "generating_preview": "Generating an option...",
     },
     "ru": {
         "start": (
@@ -143,6 +149,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "tier_partial_success": "Частичный успех",
         "tier_success": "Успех",
         "tier_critical_success": "Критический успех",
+        "preview_regen_button": "🔄 Сгенерировать ещё раз",
+        "preview_accept_button": "✅ Подходит, далее",
+        "generating_preview": "Генерирую вариант...",
     },
     "pl": {
         "start": (
@@ -190,6 +199,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "tier_partial_success": "Częściowy sukces",
         "tier_success": "Sukces",
         "tier_critical_success": "Krytyczny sukces",
+        "preview_regen_button": "🔄 Wygeneruj ponownie",
+        "preview_accept_button": "✅ Pasuje, dalej",
+        "generating_preview": "Generuję propozycję...",
     },
 }
 
