@@ -14,45 +14,94 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 DEFAULT_HP = 30
 
-# Matches a trailing "[HP:12/20]" tag the model is instructed to always append.
-HP_TAG_RE = re.compile(r"\[HP:\s*(\d+)\s*/\s*(\d+)\s*\]\s*$")
+# Matches a trailing "[STATE:HP=18/30;MONEY=45;INV=rope, sword]" tag the
+# model is instructed to always append. MONEY and INV are optional.
+STATE_TAG_RE = re.compile(r"\[STATE:(.+?)\]\s*$", re.DOTALL)
+
+# Marks a numbered option as requiring a dice roll, independent of narration
+# language (like the STATE tag, this literal token is always in English).
+ROLL_MARKER = "[ROLL]"
 
 SYSTEM_PROMPT = """\
-You are an experienced Dungeon Master running an interactive text RPG \
-adventure.
+You are an experienced, vivid Dungeon Master running an interactive text \
+RPG adventure.
 
 Follow these rules on every reply:
-1. Always write your entire reply in the language given by the "Respond in:" \
-   instruction found in the user's message. Never mix languages.
-2. Briefly (3-6 sentences) describe the outcome of the player's last action \
+
+1. LANGUAGE: Always write your entire reply in the language given by the \
+   "Respond in:" instruction found in the user's message. Never mix \
+   languages. Two exceptions, always kept literally in English regardless \
+   of narration language: the "[STATE:...]" tag (rule 9) and the "[ROLL]" \
+   marker (rule 7).
+
+2. NARRATIVE VOICE: Vary your prose. Do not open every sentence with the \
+   same second-person pronoun ("you"/"ти"/"ty" etc.) — use the grammar of \
+   the target language naturally (many languages can drop the pronoun \
+   entirely via verb conjugation). From time to time, instead of plain \
+   narration, address the character directly by name in a punchy, vivid, \
+   slightly dramatic aside that comments on what they just did — for \
+   example (English, adapt the style and language): "Kyr Volt, you just \
+   handed Arasaka an entire heist on a silver platter — and they even \
+   brought their own timer. Seven minutes until the V-11 package: either \
+   you're a genius, or a very stylish criminal with terrible planning." \
+   Don't overuse this — a couple of times per adventure is plenty, keep \
+   most narration natural and grounded.
+
+3. Briefly (3-6 sentences) describe the outcome of the player's last action \
    and the current scene.
-3. If a dice roll result is present in the user's message, use it to decide \
-   success, failure, or a critical outcome (a natural 20 is a critical \
-   success, a natural 1 is a critical failure). Never invent your own roll.
-4. Track the character's HP (health), but keep the adventure's pace long \
-   and forgiving. Most actions, even failed ones, should NOT cause damage at \
-   all — only apply damage when the fiction clearly involves a real physical \
-   danger (combat, a fall, a trap, etc.), and even then keep it small \
-   (typically 5-15% of max HP for a normal hit, more only for a rare, \
-   clearly telegraphed severe threat). Do not let HP drop to 0 except after \
-   many turns of accumulated, ignored danger — the story should comfortably \
-   run for dozens of turns before that becomes a realistic risk.
-5. If the character is wounded (HP below ~45%) or critically wounded (HP \
-   below ~20%), let this show up mildly in the narration (they're a bit \
-   slower, more cautious) without shutting down their options — the player \
-   should still have real choices, just with a bit more risk and color.
-6. When an action causes damage or healing, decide a reasonable small amount \
-   yourself and update the HP accordingly.
-7. Always end with a numbered list of 2-4 action options ("1)", "2)", etc). \
-   Occasionally mark an option as requiring a dice roll, e.g. \
-   "(requires a d20 roll)".
-7. Keep the tone adventurous, not overly grim, with no graphic violence or \
+
+4. DICE OUTCOME TIERS: if the player's message includes a roll result, it \
+   will contain one of these English tier keywords: critical_failure, \
+   failure, partial_success, success, critical_success. Interpret them like \
+   this and reflect it clearly in the narration:
+   - critical_failure: things go wrong AND there's an extra complication.
+   - failure: the action simply doesn't work, no extra twist needed.
+   - partial_success: it works, but with a cost, complication, or catch.
+   - success: it works cleanly.
+   - critical_success: it works exceptionally well, with a bonus.
+   Never invent your own dice roll — only use a result explicitly given to \
+   you.
+
+5. CHARACTER STATE MATTERS: consider the character's current HP, money, \
+   inventory, and any noted physical/mental traits (all shown in the \
+   character sheet / STATE below) when deciding what's realistic. Low funds \
+   should block bribes/purchases they can't afford; missing the right item \
+   should make certain approaches fail or need a workaround; a character \
+   described as physically weak or unskilled at something should find \
+   matching tasks harder, and vice versa for their strengths. Let \
+   inventory and money change believably through the story (loot, cost of \
+   supplies, payment for services, etc.).
+
+6. HP PACING: keep the adventure's pace long and forgiving. Most actions, \
+   even failed ones, should NOT cause damage at all — only apply damage \
+   when the fiction clearly involves real physical danger, and even then \
+   keep it small (typically 5-15% of max HP for a normal hit, more only for \
+   a rare, clearly telegraphed severe threat). Do not let HP drop to 0 \
+   except after many turns of accumulated, ignored danger. If wounded \
+   (HP below ~45%) or critically wounded (below ~20%), reflect this mildly \
+   in narration without shutting down the player's options.
+
+7. OPTIONS: always end with a numbered list of 2-4 action options ("1)", \
+   "2)", etc). If an option meaningfully depends on luck or skill and should \
+   require a dice roll, append the literal token "{roll_marker}" at the very \
+   end of that option's line (after the text, before the newline) — do not \
+   translate or explain this token, just append it exactly as shown, and \
+   only on options that truly warrant a roll (not every option needs one).
+
+8. Keep the tone adventurous, not overly grim, with no graphic violence or \
    disallowed content.
-8. The VERY LAST LINE of your reply must always be exactly one tag in the \
-   form [HP:current/max] reflecting the character's HP after this turn's \
-   events (unchanged if nothing affected it this turn). Never omit this tag, \
-   never explain it, never put anything after it.
-"""
+
+9. STATE TAG: the VERY LAST LINE of your reply must always be exactly one \
+   tag in this exact form (English keys, literal brackets/semicolons):
+   [STATE:HP=current/max;MONEY=amount;INV=item, item, item]
+   - HP is mandatory (current/max as integers).
+   - MONEY is the character's current funds as a short label (e.g. "45" or \
+     "45 credits" or "12 gold") — include it whenever the world/character \
+     has an established currency; omit only if truly not applicable yet.
+   - INV is a short comma-separated list of notable carried items — keep it \
+     concise (a handful of items, not a huge inventory dump).
+   Never omit HP. Never explain this tag. Never put anything after it.
+""".format(roll_marker=ROLL_MARKER)
 
 
 def _configure():
@@ -76,15 +125,35 @@ def get_model():
     return _model
 
 
-def parse_hp_tag(text: str) -> tuple[str, int | None, int | None]:
-    """Strip the trailing [HP:x/y] tag from a reply and return
-    (clean_text, hp, max_hp). hp/max_hp are None if the tag wasn't found."""
-    match = HP_TAG_RE.search(text.strip())
+def parse_state_tag(text: str) -> tuple[str, dict]:
+    """Strip the trailing [STATE:...] tag and return (clean_text, state).
+    state may contain keys: hp, max_hp, money, inventory — any of them can
+    be missing if the model omitted that part."""
+    match = STATE_TAG_RE.search(text.strip())
     if not match:
-        return text.strip(), None, None
-    hp, max_hp = int(match.group(1)), int(match.group(2))
-    clean = HP_TAG_RE.sub("", text).strip()
-    return clean, hp, max_hp
+        return text.strip(), {}
+
+    state: dict = {}
+    for part in match.group(1).split(";"):
+        if "=" not in part:
+            continue
+        key, _, value = part.partition("=")
+        key = key.strip().upper()
+        value = value.strip()
+        if key == "HP" and "/" in value:
+            hp_str, max_str = value.split("/", 1)
+            try:
+                state["hp"] = int(hp_str.strip())
+                state["max_hp"] = int(max_str.strip())
+            except ValueError:
+                pass
+        elif key == "MONEY" and value:
+            state["money"] = value
+        elif key == "INV" and value:
+            state["inventory"] = value
+
+    clean = STATE_TAG_RE.sub("", text).strip()
+    return clean, state
 
 
 def _status_note(character: dict) -> str:
@@ -155,10 +224,34 @@ def generate_new_adventure_opening(
         f"World category: {category_label} ({category_hint}).\n"
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
-        f"Start the character at full health: [HP:{DEFAULT_HP}/{DEFAULT_HP}] unless the "
-        "character description implies a different starting max HP, in which case use that.\n\n"
+        f"Also invent, fitting the world and character: a short note of their physical and "
+        "mental abilities/traits (e.g. strong but slow-witted, frail but clever — keep it brief "
+        "and include it naturally in the opening description), some starting money in a currency "
+        "that fits the world, and 2-4 starting inventory items. Reflect all of this in the "
+        f"closing STATE tag. Start at full health: HP={DEFAULT_HP}/{DEFAULT_HP} unless the "
+        "character description implies a different max HP, in which case use that.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
         "with the character, then the list of action options."
+    )
+    model = get_model()
+    response = model.generate_content(prompt)
+    return response.text.strip()
+
+
+def generate_summary(existing_summary: str, recent_turns: list[str], language_name: str) -> str:
+    """Compress the previous summary plus recent turns into one short,
+    updated summary — called periodically to keep long-term context (money,
+    inventory, plot threads, relationships) alive without an ever-growing
+    prompt."""
+    prompt = (
+        f"Respond in: {language_name}.\n\n"
+        "Summarize this adventure so far in 3-5 concise sentences. Preserve important "
+        "ongoing facts: key plot points, relationships, notable injuries, and anything about "
+        "the character's money or inventory that matters going forward. Combine the previous "
+        "summary with the recent events below into one updated summary — do not just append, "
+        "actually condense.\n\n"
+        f"Previous summary: {existing_summary or '(none yet)'}\n\n"
+        "Recent events:\n" + "\n".join(recent_turns)
     )
     model = get_model()
     response = model.generate_content(prompt)

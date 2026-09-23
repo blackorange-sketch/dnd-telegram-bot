@@ -43,6 +43,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "dice_total": "Підсумок: {total}",
         "choosing_option": "Обираю варіант {n}",
         "rolled_action": "Кидаю кубик d{sides}: випало {value}{penalty_note}.",
+        "requires_roll_hint": "(потрібен кидок d20)",
+        "tier_critical_failure": "Фатальна невдача",
+        "tier_failure": "Невдача",
+        "tier_partial_success": "Частковий успіх",
+        "tier_success": "Успіх",
+        "tier_critical_success": "Критичний успіх",
     },
     "en": {
         "start": (
@@ -84,6 +90,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "dice_total": "Total: {total}",
         "choosing_option": "Choosing option {n}",
         "rolled_action": "Rolling a d{sides}: got {value}{penalty_note}.",
+        "requires_roll_hint": "(requires a d20 roll)",
+        "tier_critical_failure": "Critical failure",
+        "tier_failure": "Failure",
+        "tier_partial_success": "Partial success",
+        "tier_success": "Success",
+        "tier_critical_success": "Critical success",
     },
     "ru": {
         "start": (
@@ -125,6 +137,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "dice_total": "Итог: {total}",
         "choosing_option": "Выбираю вариант {n}",
         "rolled_action": "Бросаю кубик d{sides}: выпало {value}{penalty_note}.",
+        "requires_roll_hint": "(нужен бросок d20)",
+        "tier_critical_failure": "Фатальная неудача",
+        "tier_failure": "Неудача",
+        "tier_partial_success": "Частичный успех",
+        "tier_success": "Успех",
+        "tier_critical_success": "Критический успех",
     },
     "pl": {
         "start": (
@@ -166,6 +184,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "dice_total": "Wynik: {total}",
         "choosing_option": "Wybieram opcję {n}",
         "rolled_action": "Rzucam kością d{sides}: wypadło {value}{penalty_note}.",
+        "requires_roll_hint": "(wymaga rzutu d20)",
+        "tier_critical_failure": "Krytyczna porażka",
+        "tier_failure": "Porażka",
+        "tier_partial_success": "Częściowy sukces",
+        "tier_success": "Sukces",
+        "tier_critical_success": "Krytyczny sukces",
     },
 }
 

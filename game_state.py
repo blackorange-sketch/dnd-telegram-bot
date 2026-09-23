@@ -16,6 +16,9 @@ DB_PATH = Path(__file__).parent / "game_data.sqlite3"
 MAX_RECENT_TURNS = 6  # how many raw turns to keep verbatim before summarizing
 
 
+SUMMARY_EVERY_N_TURNS = 12  # how often to compress recent_turns into `summary`
+
+
 @dataclass
 class GameState:
     user_id: int
@@ -23,6 +26,8 @@ class GameState:
     summary: str = ""
     recent_turns: list[str] = field(default_factory=list)
     language: str = "uk"
+    turn_count: int = 0
+    pending_options: list[dict] = field(default_factory=list)
 
     def to_json(self) -> str:
         return json.dumps({
@@ -30,6 +35,8 @@ class GameState:
             "summary": self.summary,
             "recent_turns": self.recent_turns,
             "language": self.language,
+            "turn_count": self.turn_count,
+            "pending_options": self.pending_options,
         })
 
     @classmethod
@@ -41,6 +48,8 @@ class GameState:
             summary=data.get("summary", ""),
             recent_turns=data.get("recent_turns", []),
             language=data.get("language", "uk"),
+            turn_count=data.get("turn_count", 0),
+            pending_options=data.get("pending_options", []),
         )
 
     def add_turn(self, text: str) -> None:

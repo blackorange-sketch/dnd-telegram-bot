@@ -45,3 +45,17 @@ def hp_penalty(hp: int, max_hp: int) -> int:
     if ratio <= 0.45:
         return -1
     return 0
+
+
+def classify(natural: int, total: int) -> str:
+    """Classify a d20 check into one of five outcome tiers. A natural 1 or
+    20 always overrides the total (classic critical fail/success)."""
+    if natural == 1:
+        return "critical_failure"
+    if natural == 20:
+        return "critical_success"
+    if total <= 8:
+        return "failure"
+    if total <= 13:
+        return "partial_success"
+    return "success"

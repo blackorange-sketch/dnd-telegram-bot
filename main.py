@@ -22,7 +22,7 @@ import gemini_client
 import languages as lang
 import ui_strings as ui
 import world_categories as wc
-from game_state import GameState, delete_state, load_state, save_state
+from game_state import SUMMARY_EVERY_N_TURNS, GameState, delete_state, load_state, save_state
 
 load_dotenv()
 
@@ -37,6 +37,16 @@ dp = Dispatcher(storage=MemoryStorage())
 # Simple per-user lock so a second button press while a Gemini call is still
 # in flight doesn't kick off a second, overlapping story continuation.
 active_users: set[int] = set()
+
+TIER_EMOJI = {
+    "critical_failure": "💥",
+    "failure": "❌",
+    "partial_success": "➖",
+    "success": "✅",
+    "critical_success": "🌟",
+}
+
+OPTION_LINE_RE = re.compile(r"^\s*\d\)\s*.+$", re.MULTILINE)
 
 
 class Creation(StatesGroup):
@@ -90,18 +100,31 @@ def gender_keyboard(lang_key: str) -> InlineKeyboardMarkup:
     ])
 
 
-def action_keyboard(options: list[str]) -> InlineKeyboardMarkup:
-    """Build inline buttons from a numbered list like '1) Do the thing'."""
-    buttons = []
-    for i, _ in enumerate(options, start=1):
-        buttons.append(InlineKeyboardButton(text=str(i), callback_data=f"choice:{i}"))
+def action_keyboard(option_count: int) -> InlineKeyboardMarkup:
+    buttons = [InlineKeyboardButton(text=str(i), callback_data=f"choice:{i}") for i in range(1, option_count + 1)]
     buttons.append(InlineKeyboardButton(text="🎲 d20", callback_data="roll:20"))
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
-def extract_options(story_text: str) -> list[str]:
-    """Pull numbered options ('1) ...', '2) ...') out of the model's reply."""
-    return re.findall(r"^\s*\d\)\s*.+$", story_text, flags=re.MULTILINE)
+def format_options(story_text: str, lang_key: str) -> tuple[str, list[dict]]:
+    """Find numbered option lines, strip the internal [ROLL] marker and
+    replace it with a localized hint for display, and return the cleaned
+    text plus a list of {"text": ..., "requires_roll": bool} in order."""
+    options: list[dict] = []
+
+    def repl(match: re.Match) -> str:
+        line = match.group(0)
+        requires_roll = gemini_client.ROLL_MARKER in line
+        clean_line = line.replace(gemini_client.ROLL_MARKER, "").rstrip()
+        # Strip the leading "N) " to store just the option's own text.
+        text_only = re.sub(r"^\s*\d\)\s*", "", clean_line)
+        options.append({"text": text_only, "requires_roll": requires_roll})
+        if requires_roll:
+            clean_line += " " + ui.t(lang_key, "requires_roll_hint")
+        return clean_line
+
+    new_text = OPTION_LINE_RE.sub(repl, story_text)
+    return new_text, options
 
 
 async def clear_keyboard(callback: CallbackQuery):
@@ -111,6 +134,31 @@ async def clear_keyboard(callback: CallbackQuery):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass  # message may already have no markup, or be too old to edit
+
+
+def status_line(lang_key: str, character: dict) -> str:
+    parts = [f"{ui.t(lang_key, 'hp_label')}: {character.get('hp')}/{character.get('max_hp')}"]
+    if character.get("money"):
+        parts.append(f"💰 {character['money']}")
+    return " | ".join(parts)
+
+
+async def maybe_summarize(game: GameState):
+    """Every SUMMARY_EVERY_N_TURNS turns, compress recent_turns into the
+    running summary so long adventures don't lose track of money,
+    inventory, and plot threads once old turns get dropped."""
+    if game.turn_count == 0 or game.turn_count % SUMMARY_EVERY_N_TURNS != 0:
+        return
+    try:
+        new_summary = gemini_client.generate_summary(
+            existing_summary=game.summary,
+            recent_turns=game.recent_turns,
+            language_name=lang.prompt_name_for(game.language),
+        )
+        game.summary = new_summary
+        game.recent_turns = game.recent_turns[-2:]  # keep just a little recent continuity
+    except Exception:
+        logger.exception("Summary generation failed, skipping this round")
 
 
 # ---------------------------------------------------------------------------
@@ -299,24 +347,29 @@ async def finalize_creation(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    clean_text, hp, max_hp = gemini_client.parse_hp_tag(opening)
-    hp = hp if hp is not None else gemini_client.DEFAULT_HP
-    max_hp = max_hp if max_hp is not None else gemini_client.DEFAULT_HP
+    clean_text, parsed_state = gemini_client.parse_state_tag(opening)
+    hp = parsed_state.get("hp", gemini_client.DEFAULT_HP)
+    max_hp = parsed_state.get("max_hp", gemini_client.DEFAULT_HP)
 
     character_record["category"] = category_key
     character_record["world_description"] = world_description
     character_record["hp"] = hp
     character_record["max_hp"] = max_hp
+    if "money" in parsed_state:
+        character_record["money"] = parsed_state["money"]
+    if "inventory" in parsed_state:
+        character_record["inventory"] = parsed_state["inventory"]
+
+    display_text, options = format_options(clean_text, lang_key)
 
     game = GameState(user_id=message.from_user.id, character=character_record, language=lang_key)
     game.add_turn(f"[DM]: {clean_text}")
+    game.pending_options = options
     save_state(game)
     await state.clear()
 
-    options = extract_options(clean_text)
-    kb = action_keyboard(options) if options else None
-    hp_line = f"{ui.t(lang_key, 'hp_label')}: {hp}/{max_hp}"
-    await message.answer(f"{clean_text}\n\n{hp_line}", reply_markup=kb)
+    kb = action_keyboard(len(options)) if options else None
+    await message.answer(f"{display_text}\n\n{status_line(lang_key, character_record)}", reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------
@@ -353,22 +406,29 @@ async def advance_story(message_or_callback, user_id: int, player_input: str):
             await message_or_callback.answer(ui.t(lang_key, "gemini_error", error=e))
             return
 
-        clean_text, hp, max_hp = gemini_client.parse_hp_tag(story_text)
-        if hp is not None:
-            game.character["hp"] = hp
-            game.character["max_hp"] = max_hp if max_hp is not None else game.character.get("max_hp", hp)
+        clean_text, parsed_state = gemini_client.parse_state_tag(story_text)
+        if "hp" in parsed_state:
+            game.character["hp"] = parsed_state["hp"]
+            game.character["max_hp"] = parsed_state.get("max_hp", game.character.get("max_hp"))
+        if "money" in parsed_state:
+            game.character["money"] = parsed_state["money"]
+        if "inventory" in parsed_state:
+            game.character["inventory"] = parsed_state["inventory"]
+
+        display_text, options = format_options(clean_text, lang_key)
 
         game.add_turn(f"[DM]: {clean_text}")
+        game.pending_options = options
+        game.turn_count += 1
+        await maybe_summarize(game)
         save_state(game)
 
-        options = extract_options(clean_text)
-        kb = action_keyboard(options) if options else None
+        kb = action_keyboard(len(options)) if options else None
 
-        reply_text = clean_text
-        if hp is not None:
-            reply_text += f"\n\n{ui.t(lang_key, 'hp_label')}: {hp}/{game.character.get('max_hp', hp)}"
-            if hp <= 0:
-                reply_text += f"\n\n{ui.t(lang_key, 'defeated')}"
+        reply_text = f"{display_text}\n\n{status_line(lang_key, game.character)}"
+        hp = game.character.get("hp")
+        if hp is not None and hp <= 0:
+            reply_text += f"\n\n{ui.t(lang_key, 'defeated')}"
 
         await message_or_callback.answer(reply_text, reply_markup=kb)
     finally:
@@ -385,6 +445,27 @@ async def handle_free_text(message: Message, state: FSMContext):
     await advance_story(message, message.from_user.id, message.text)
 
 
+async def do_roll_and_describe(callback: CallbackQuery, lang_key: str, game: GameState, sides: int = 20) -> str:
+    """Roll the die, post a standalone result message with the outcome
+    tier, and return the action text to feed into the story generation."""
+    hp = game.character.get("hp", gemini_client.DEFAULT_HP)
+    max_hp = game.character.get("max_hp", gemini_client.DEFAULT_HP)
+    penalty = dice.hp_penalty(hp, max_hp)
+
+    result = dice.roll(sides, modifier=penalty)
+    tier = dice.classify(result.value, result.total)
+    penalty_note = ui.t(lang_key, "dice_penalty_note", penalty=penalty) if penalty else ""
+
+    roll_message = (
+        f"{ui.t(lang_key, 'dice_roll_label', sides=sides)}: {result.value}{penalty_note}\n"
+        f"{ui.t(lang_key, 'dice_total', total=result.total)}\n"
+        f"{TIER_EMOJI[tier]} {ui.t(lang_key, f'tier_{tier}')}"
+    )
+    await callback.message.answer(roll_message)
+
+    return f"roll result: {tier} (natural {result.value}, total {result.total})"
+
+
 @dp.callback_query(F.data.startswith("choice:"))
 async def handle_choice(callback: CallbackQuery):
     game = load_state(callback.from_user.id)
@@ -394,10 +475,23 @@ async def handle_choice(callback: CallbackQuery):
         await callback.answer(ui.t(lang_key, "please_wait"))
         return
 
-    choice_num = callback.data.split(":")[1]
+    choice_num = int(callback.data.split(":")[1])
     await callback.answer()
-    await clear_keyboard(callback)  # prevent re-pressing this same message's buttons
-    await advance_story(callback.message, callback.from_user.id, ui.t(lang_key, "choosing_option", n=choice_num))
+    await clear_keyboard(callback)
+
+    option = None
+    if game and game.pending_options and 1 <= choice_num <= len(game.pending_options):
+        option = game.pending_options[choice_num - 1]
+
+    if option is None:
+        action_text = ui.t(lang_key, "choosing_option", n=choice_num)
+    elif option.get("requires_roll"):
+        roll_summary = await do_roll_and_describe(callback, lang_key, game)
+        action_text = f"{option['text']} — {roll_summary}"
+    else:
+        action_text = option["text"]
+
+    await advance_story(callback.message, callback.from_user.id, action_text)
 
 
 @dp.callback_query(F.data.startswith("roll:"))
@@ -410,23 +504,11 @@ async def handle_roll_button(callback: CallbackQuery):
         return
 
     sides = int(callback.data.split(":")[1])
-    hp = game.character.get("hp", gemini_client.DEFAULT_HP) if game else gemini_client.DEFAULT_HP
-    max_hp = game.character.get("max_hp", gemini_client.DEFAULT_HP) if game else gemini_client.DEFAULT_HP
-    penalty = dice.hp_penalty(hp, max_hp)
-
-    result = dice.roll(sides, modifier=penalty)
     await callback.answer()
-    await clear_keyboard(callback)  # prevent re-pressing this same message's buttons
+    await clear_keyboard(callback)
 
-    penalty_note = ui.t(lang_key, "dice_penalty_note", penalty=penalty) if penalty else ""
-    roll_message = (
-        f"{ui.t(lang_key, 'dice_roll_label', sides=sides)}: {result.value}{penalty_note}\n"
-        f"{ui.t(lang_key, 'dice_total', total=result.total)}"
-    )
-    await callback.message.answer(roll_message)
-
-    action_text = ui.t(lang_key, "rolled_action", sides=sides, value=result.value, penalty_note=penalty_note)
-    await advance_story(callback.message, callback.from_user.id, action_text)
+    roll_summary = await do_roll_and_describe(callback, lang_key, game, sides=sides)
+    await advance_story(callback.message, callback.from_user.id, f"I roll a die — {roll_summary}")
 
 
 async def main():
