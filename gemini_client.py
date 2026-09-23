@@ -68,10 +68,30 @@ def generate_story_turn(summary: str, recent_turns: list[str], character: dict, 
     return response.text.strip()
 
 
-def generate_new_adventure_opening(character: dict) -> str:
+def generate_new_adventure_opening(
+    category_label: str,
+    category_hint: str,
+    world_description: str | None,
+    character_brief: str,
+) -> str:
+    """Generate the opening scene for a brand-new adventure.
+
+    category_label/category_hint come from world_categories.py.
+    world_description is either the player's own text or None (Gemini invents one).
+    character_brief is a ready-made instruction describing the character —
+    either the player's own description or gender/age for random generation.
+    """
+    if world_description:
+        world_part = f"Опис світу від гравця: {world_description}"
+    else:
+        world_part = f"Вигадай сам світ, що пасує категорії ({category_hint})."
+
     prompt = (
-        f"Почни нову коротку пригоду для персонажа: {character}. "
-        "Опиши місце дії, зав'язку та перші варіанти дій."
+        f"Категорія світу: {category_label} ({category_hint}).\n"
+        f"{world_part}\n\n"
+        f"{character_brief}\n\n"
+        "Почни нову коротку пригоду: опиши місце дії, зав'язку та стартову сцену "
+        "з персонажем, а тоді список варіантів дій."
     )
     model = get_model()
     response = model.generate_content(prompt)
