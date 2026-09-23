@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import random
-import re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
@@ -14,15 +13,19 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    WebAppInfo,
 )
+from aiohttp import web
 from dotenv import load_dotenv
 
+import core
 import dice
 import gemini_client
 import languages as lang
 import ui_strings as ui
+import webapp
 import world_categories as wc
-from game_state import SUMMARY_EVERY_N_TURNS, GameState, delete_state, load_state, save_state
+from game_state import GameState, delete_state, load_state, save_state
 
 load_dotenv()
 
@@ -30,6 +33,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+PUBLIC_URL = os.environ.get("PUBLIC_URL")  # e.g. https://your-app.up.railway.app
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -45,8 +49,6 @@ TIER_EMOJI = {
     "success": "✅",
     "critical_success": "🌟",
 }
-
-OPTION_LINE_RE = re.compile(r"^\s*\d\)\s*.+$", re.MULTILINE)
 
 
 class Creation(StatesGroup):
@@ -116,24 +118,7 @@ def action_keyboard(option_count: int) -> InlineKeyboardMarkup:
 
 
 def format_options(story_text: str, lang_key: str) -> tuple[str, list[dict]]:
-    """Find numbered option lines, strip the internal [ROLL] marker and
-    replace it with a localized hint for display, and return the cleaned
-    text plus a list of {"text": ..., "requires_roll": bool} in order."""
-    options: list[dict] = []
-
-    def repl(match: re.Match) -> str:
-        line = match.group(0)
-        requires_roll = gemini_client.ROLL_MARKER in line
-        clean_line = line.replace(gemini_client.ROLL_MARKER, "").rstrip()
-        # Strip the leading "N) " to store just the option's own text.
-        text_only = re.sub(r"^\s*\d\)\s*", "", clean_line)
-        options.append({"text": text_only, "requires_roll": requires_roll})
-        if requires_roll:
-            clean_line += " " + ui.t(lang_key, "requires_roll_hint")
-        return clean_line
-
-    new_text = OPTION_LINE_RE.sub(repl, story_text)
-    return new_text, options
+    return core.format_options(story_text, lang_key)
 
 
 async def clear_keyboard(callback: CallbackQuery):
@@ -153,21 +138,7 @@ def status_line(lang_key: str, character: dict) -> str:
 
 
 async def maybe_summarize(game: GameState):
-    """Every SUMMARY_EVERY_N_TURNS turns, compress recent_turns into the
-    running summary so long adventures don't lose track of money,
-    inventory, and plot threads once old turns get dropped."""
-    if game.turn_count == 0 or game.turn_count % SUMMARY_EVERY_N_TURNS != 0:
-        return
-    try:
-        new_summary = gemini_client.generate_summary(
-            existing_summary=game.summary,
-            recent_turns=game.recent_turns,
-            language_name=lang.prompt_name_for(game.language),
-        )
-        game.summary = new_summary
-        game.recent_turns = game.recent_turns[-2:]  # keep just a little recent continuity
-    except Exception:
-        logger.exception("Summary generation failed, skipping this round")
+    await core.maybe_summarize(game)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +166,25 @@ async def cmd_reset(message: Message, state: FSMContext):
 async def cmd_roll(message: Message):
     result = dice.roll(20)
     await message.answer(f"🎲 {result.describe()}")
+
+
+@dp.message(Command("play"))
+async def cmd_play(message: Message):
+    game = load_state(message.from_user.id)
+    lang_key = game.language if game else lang.DEFAULT_LANGUAGE
+    if game is None:
+        await message.answer(ui.t(lang_key, "no_active_game"))
+        return
+    if not PUBLIC_URL:
+        await message.answer(
+            "PUBLIC_URL не налаштований — додай його як змінну середовища "
+            "(посилання на цей сервіс, наприклад https://your-app.up.railway.app)."
+        )
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=ui.t(lang_key, "open_miniapp_button"), web_app=WebAppInfo(url=f"{PUBLIC_URL}/miniapp"))
+    ]])
+    await message.answer(ui.t(lang_key, "play_intro"), reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------
@@ -474,47 +464,16 @@ async def advance_story(message_or_callback, user_id: int, player_input: str):
     lang_key = game.language
     active_users.add(user_id)
     try:
-        game.add_turn(f"[Player]: {player_input}")
-
         try:
-            story_text = gemini_client.generate_story_turn(
-                summary=game.summary,
-                recent_turns=game.recent_turns,
-                character=game.character,
-                player_input=player_input,
-                language_name=lang.prompt_name_for(lang_key),
-            )
+            result = await core.perform_turn(game, player_input)
         except Exception as e:
             logger.exception("Gemini error")
             await message_or_callback.answer(ui.t(lang_key, "gemini_error", error=e))
             return
 
-        clean_text, parsed_state = gemini_client.parse_state_tag(story_text)
-        if "hp" in parsed_state:
-            # max_hp shouldn't drift turn to turn — lock it once set, so a
-            # model slip can't silently reset the character's max health.
-            if not game.character.get("max_hp"):
-                game.character["max_hp"] = parsed_state.get("max_hp")
-            max_hp = game.character.get("max_hp") or parsed_state["hp"]
-            game.character["hp"] = max(0, min(parsed_state["hp"], max_hp))
-        if "money" in parsed_state:
-            game.character["money"] = parsed_state["money"]
-        if "inventory" in parsed_state:
-            game.character["inventory"] = parsed_state["inventory"]
-
-        display_text, options = format_options(clean_text, lang_key)
-
-        game.add_turn(f"[DM]: {clean_text}")
-        game.pending_options = options
-        game.turn_count += 1
-        await maybe_summarize(game)
-        save_state(game)
-
-        kb = action_keyboard(len(options)) if options else None
-
-        reply_text = f"{display_text}\n\n{status_line(lang_key, game.character)}"
-        hp = game.character.get("hp")
-        if hp is not None and hp <= 0:
+        kb = action_keyboard(len(result["options"])) if result["options"] else None
+        reply_text = f"{result['text']}\n\n{status_line(lang_key, result['character'])}"
+        if result["defeated"]:
             reply_text += f"\n\n{ui.t(lang_key, 'defeated')}"
 
         await message_or_callback.answer(reply_text, reply_markup=kb)
@@ -535,22 +494,18 @@ async def handle_free_text(message: Message, state: FSMContext):
 async def do_roll_and_describe(callback: CallbackQuery, lang_key: str, game: GameState, sides: int = 20) -> str:
     """Roll the die, post a standalone result message with the outcome
     tier, and return the action text to feed into the story generation."""
-    hp = game.character.get("hp", gemini_client.DEFAULT_HP)
-    max_hp = game.character.get("max_hp", gemini_client.DEFAULT_HP)
-    penalty = dice.hp_penalty(hp, max_hp)
-
-    result = dice.roll(sides, modifier=penalty)
-    tier = dice.classify(result.value, result.total)
-    penalty_note = ui.t(lang_key, "dice_penalty_note", penalty=penalty) if penalty else ""
+    roll_info = core.compute_roll(game, sides)
+    tier = roll_info["tier"]
+    penalty_note = ui.t(lang_key, "dice_penalty_note", penalty=roll_info["penalty"]) if roll_info["penalty"] else ""
 
     roll_message = (
-        f"{ui.t(lang_key, 'dice_roll_label', sides=sides)}: {result.value}{penalty_note}\n"
-        f"{ui.t(lang_key, 'dice_total', total=result.total)}\n"
+        f"{ui.t(lang_key, 'dice_roll_label', sides=sides)}: {roll_info['value']}{penalty_note}\n"
+        f"{ui.t(lang_key, 'dice_total', total=roll_info['total'])}\n"
         f"{TIER_EMOJI[tier]} {ui.t(lang_key, f'tier_{tier}')}"
     )
     await callback.message.answer(roll_message)
 
-    return f"roll result: {tier} (natural {result.value}, total {result.total})"
+    return core.roll_action_text(roll_info)
 
 
 @dp.callback_query(F.data.startswith("choice:"))
@@ -601,6 +556,15 @@ async def handle_roll_button(callback: CallbackQuery):
 async def main():
     if not BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set (check your .env file)")
+
+    app = webapp.create_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Web server listening on port {port}")
+
     await dp.start_polling(bot)
 
 

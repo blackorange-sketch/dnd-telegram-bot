@@ -52,6 +52,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "preview_regen_button": "🔄 Згенерувати ще раз",
         "preview_accept_button": "✅ Підходить, далі",
         "generating_preview": "Генерую варіант...",
+        "open_miniapp_button": "🎮 Відкрити пригоду",
+        "play_intro": "Тисни кнопку, щоб відкрити гру як застосунок:",
     },
     "en": {
         "start": (
@@ -102,6 +104,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "preview_regen_button": "🔄 Generate another",
         "preview_accept_button": "✅ Works for me, continue",
         "generating_preview": "Generating an option...",
+        "open_miniapp_button": "🎮 Open adventure",
+        "play_intro": "Tap the button to open the game as an app:",
     },
     "ru": {
         "start": (
@@ -152,6 +156,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "preview_regen_button": "🔄 Сгенерировать ещё раз",
         "preview_accept_button": "✅ Подходит, далее",
         "generating_preview": "Генерирую вариант...",
+        "open_miniapp_button": "🎮 Открыть приключение",
+        "play_intro": "Нажми кнопку, чтобы открыть игру как приложение:",
     },
     "pl": {
         "start": (
@@ -202,6 +208,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "preview_regen_button": "🔄 Wygeneruj ponownie",
         "preview_accept_button": "✅ Pasuje, dalej",
         "generating_preview": "Generuję propozycję...",
+        "open_miniapp_button": "🎮 Otwórz przygodę",
+        "play_intro": "Kliknij przycisk, aby otworzyć grę jako aplikację:",
     },
 }
 
