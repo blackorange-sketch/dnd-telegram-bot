@@ -5,18 +5,26 @@ line was retired for new users in late 2026); swap GEMINI_MODEL if you want
 richer prose from gemini-3.6-flash instead.
 """
 
+import json
+import logging
 import os
 import re
 
 import google.generativeai as genai
 
+logger = logging.getLogger(__name__)
+
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 DEFAULT_HP = 30
 
-# Matches a trailing "[STATE:HP=18/30;MONEY=45;INV=rope, sword]" tag the
-# model is instructed to always append. MONEY and INV are optional.
-STATE_TAG_RE = re.compile(r"\[STATE:(.+?)\]\s*$", re.DOTALL)
+# Matches a trailing "[STATE]{"hp":18,"max_hp":30,...}[/STATE]" JSON block
+# the model is instructed to always append.
+STATE_TAG_RE = re.compile(r"\[STATE\]\s*(\{.*?\})\s*\[/STATE\]\s*$", re.DOTALL)
+
+# Matches an "[ATTRS]{"Strength":6,...}[/ATTRS]" JSON block, only expected
+# once, right before the STATE tag, when a brand-new character is created.
+ATTRS_TAG_RE = re.compile(r"\[ATTRS\]\s*(\{.*?\})\s*\[/ATTRS\]\s*$", re.DOTALL)
 
 # Marks a numbered option as requiring a dice roll, independent of narration
 # language (like the STATE tag, this literal token is always in English).
@@ -31,8 +39,10 @@ Follow these rules on every reply:
 1. LANGUAGE: Always write your entire reply in the language given by the \
    "Respond in:" instruction found in the user's message. Never mix \
    languages. Two exceptions, always kept literally in English regardless \
-   of narration language: the "[STATE:...]" tag (rule 9) and the "[ROLL]" \
-   marker (rule 7).
+   of narration language: the JSON keys inside the "[STATE]...[/STATE]" and \
+   "[ATTRS]...[/ATTRS]" tags (rules 9-10) and the "[ROLL]" marker (rule 7). \
+   String VALUES inside those JSON tags (item names, attribute labels) \
+   should be written in the target language.
 
 2. NARRATIVE VOICE: Vary your prose. Do not open every sentence with the \
    same second-person pronoun ("you"/"ти"/"ty" etc.) — use the grammar of \
@@ -92,22 +102,37 @@ Follow these rules on every reply:
    disallowed content.
 
 9. STATE TAG: the VERY LAST LINE of your reply must always be exactly one \
-   tag in this exact form (English keys, literal brackets/semicolons):
-   [STATE:HP=current/max;MONEY=amount;INV=item, item, item]
-   - Before writing it, check the "CURRENT STATE" line given to you in the \
+   tag in this exact form — a single line, valid JSON, English keys, no \
+   trailing commas, no comments:
+   [STATE]{{"hp": current, "max_hp": max, "money": "amount label", "inventory": ["item", "item"]}}[/STATE]
+   - Before writing it, check the "CURRENT STATE" given to you in the \
      prompt (when present) — it is the ground truth going into this turn. \
      Copy each value forward EXACTLY as given unless something in THIS \
      specific turn changed it (damage, healing, a purchase, a find, using \
-     an item). Never reset, round, or reinvent HP/MONEY/INV from scratch — \
-     always start from the given values and adjust only what actually \
-     changed.
-   - HP is mandatory (current/max as integers).
-   - MONEY is the character's current funds as a short label (e.g. "45" or \
+     an item). Never reset, round, or reinvent hp/money/inventory from \
+     scratch — always start from the given values and adjust only what \
+     actually changed.
+   - "hp" and "max_hp" are mandatory integers.
+   - "money" is a short string label in the world's currency (e.g. "45" or \
      "45 credits" or "12 gold") — include it whenever the world/character \
-     has an established currency; omit only if truly not applicable yet.
-   - INV is a short comma-separated list of notable carried items — keep it \
-     concise (a handful of items, not a huge inventory dump).
-   Never omit HP. Never explain this tag. Never put anything after it.
+     has an established currency; omit the key only if truly not \
+     applicable yet.
+   - "inventory" is a JSON array of short strings, one per notable item \
+     (e.g. "rusty sword", "health potion x2") — keep it concise, a handful \
+     of items, not a huge dump.
+   Never omit "hp"/"max_hp". Never explain this tag. Never put anything \
+   after it.
+
+10. ATTRS TAG (new characters only): if — and only if — the prompt \
+    explicitly tells you this is a brand-new character being created, also \
+    output one more JSON tag placed right before the STATE tag (same line \
+    format rules apply):
+    [ATTRS]{{"Label": value, "Label": value}}[/ATTRS]
+    Pick 2-4 short attribute labels in the target language that fit the \
+    world and character (e.g. physical strength, intellect, agility, \
+    willpower — whatever suits the setting), each an integer from 1 to 10. \
+    Never output this tag on ordinary story turns — attributes are set \
+    once at character creation and stay fixed afterward.
 """.format(roll_marker=ROLL_MARKER)
 
 
@@ -133,59 +158,80 @@ def get_model():
 
 
 def parse_state_tag(text: str) -> tuple[str, dict]:
-    """Strip the trailing [STATE:...] tag and return (clean_text, state).
-    state may contain keys: hp, max_hp, money, inventory — any of them can
-    be missing if the model omitted that part."""
+    """Strip the trailing [STATE]{...}[/STATE] JSON tag and return
+    (clean_text, state). state may contain keys: hp, max_hp, money,
+    inventory (a list) — any of them can be missing if the model omitted
+    that part, and the whole dict is empty if the JSON was malformed."""
     match = STATE_TAG_RE.search(text.strip())
     if not match:
         return text.strip(), {}
 
     state: dict = {}
-    for part in match.group(1).split(";"):
-        if "=" not in part:
-            continue
-        key, _, value = part.partition("=")
-        key = key.strip().upper()
-        value = value.strip()
-        if key == "HP" and "/" in value:
-            hp_str, max_str = value.split("/", 1)
-            try:
-                state["hp"] = int(hp_str.strip())
-                state["max_hp"] = int(max_str.strip())
-            except ValueError:
-                pass
-        elif key == "MONEY" and value:
-            state["money"] = value
-        elif key == "INV" and value:
-            state["inventory"] = value
+    try:
+        data = json.loads(match.group(1))
+        hp, max_hp = data.get("hp"), data.get("max_hp")
+        if isinstance(hp, int) and isinstance(max_hp, int):
+            state["hp"] = hp
+            state["max_hp"] = max_hp
+        money = data.get("money")
+        if isinstance(money, str) and money:
+            state["money"] = money
+        inventory = data.get("inventory")
+        if isinstance(inventory, list):
+            state["inventory"] = [str(item) for item in inventory]
+    except (json.JSONDecodeError, AttributeError, TypeError) as e:
+        logger.warning("Failed to parse STATE tag JSON (%s): %r", e, match.group(1))
 
     clean = STATE_TAG_RE.sub("", text).strip()
     return clean, state
+
+
+def parse_attrs_tag(text: str) -> tuple[str, dict | None]:
+    """Strip the trailing [ATTRS]{...}[/ATTRS] JSON tag (only expected once,
+    at character creation) and return (clean_text, attrs_dict_or_None)."""
+    match = ATTRS_TAG_RE.search(text.strip())
+    if not match:
+        return text.strip(), None
+
+    attrs = None
+    try:
+        data = json.loads(match.group(1))
+        if isinstance(data, dict) and data:
+            attrs = {str(k): v for k, v in data.items()}
+    except (json.JSONDecodeError, AttributeError, TypeError) as e:
+        logger.warning("Failed to parse ATTRS tag JSON (%s): %r", e, match.group(1))
+
+    clean = ATTRS_TAG_RE.sub("", text).strip()
+    return clean, attrs
 
 
 STATE_FIELDS = {"hp", "max_hp", "money", "inventory"}
 
 
 def _background_dict(character: dict) -> dict:
-    """Stable facts about the character (description, category, etc.) —
-    everything except the fields that change turn to turn."""
+    """Stable facts about the character (description, category, attributes,
+    etc.) — everything except the fields that change turn to turn."""
     return {k: v for k, v in character.items() if k not in STATE_FIELDS}
 
 
 def _state_line(character: dict) -> str:
-    """Render current HP/money/inventory as one explicit, unambiguous
+    """Render current HP/money/inventory as one explicit, unambiguous JSON
     line — kept separate from the character sheet dump and placed right
     before the player's action so the model can't lose track of it."""
     hp = character.get("hp")
     max_hp = character.get("max_hp")
-    parts = []
+    payload = {}
     if hp is not None and max_hp:
-        parts.append(f"HP={hp}/{max_hp}")
+        payload["hp"] = hp
+        payload["max_hp"] = max_hp
+    else:
+        payload["hp"] = DEFAULT_HP
+        payload["max_hp"] = DEFAULT_HP
     if character.get("money"):
-        parts.append(f"MONEY={character['money']}")
+        payload["money"] = character["money"]
     if character.get("inventory"):
-        parts.append(f"INV={character['inventory']}")
-    return "; ".join(parts) if parts else f"HP={DEFAULT_HP}/{DEFAULT_HP}"
+        payload["inventory"] = character["inventory"]
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _status_note(character: dict) -> str:
@@ -301,12 +347,12 @@ def generate_new_adventure_opening(
         f"World category: {category_label} ({category_hint}).\n"
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
-        f"Also invent, fitting the world and character: a short note of their physical and "
-        "mental abilities/traits (e.g. strong but slow-witted, frail but clever — keep it brief "
-        "and include it naturally in the opening description), some starting money in a currency "
-        "that fits the world, and 2-4 starting inventory items. Reflect all of this in the "
-        f"closing STATE tag. Start at full health: HP={DEFAULT_HP}/{DEFAULT_HP} unless the "
-        "character description implies a different max HP, in which case use that.\n\n"
+        "THIS IS A NEW CHARACTER BEING CREATED — also invent, fitting the world and character: "
+        "2-4 short physical/mental attributes (see rule 10, the ATTRS tag), some starting money "
+        "in a currency that fits the world, and 2-4 starting inventory items. Reflect the money "
+        f"and inventory in the closing STATE tag, and the attributes in the ATTRS tag placed "
+        f"right before it. Start at full health: hp=max_hp={DEFAULT_HP} unless the character "
+        "description implies a different max HP, in which case use that.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
         "with the character, then the list of action options."
     )

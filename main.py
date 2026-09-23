@@ -427,7 +427,8 @@ async def finalize_creation(message: Message, user_id: int, state: FSMContext):
         await state.clear()
         return
 
-    clean_text, parsed_state = gemini_client.parse_state_tag(opening)
+    text_after_state, parsed_state = gemini_client.parse_state_tag(opening)
+    clean_text, attrs = gemini_client.parse_attrs_tag(text_after_state)
     hp = parsed_state.get("hp", gemini_client.DEFAULT_HP)
     max_hp = parsed_state.get("max_hp", gemini_client.DEFAULT_HP)
 
@@ -439,6 +440,8 @@ async def finalize_creation(message: Message, user_id: int, state: FSMContext):
         character_record["money"] = parsed_state["money"]
     if "inventory" in parsed_state:
         character_record["inventory"] = parsed_state["inventory"]
+    if attrs:
+        character_record["attributes"] = attrs
 
     display_text, options = format_options(clean_text, lang_key)
 
