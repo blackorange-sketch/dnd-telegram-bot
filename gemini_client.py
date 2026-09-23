@@ -94,6 +94,13 @@ Follow these rules on every reply:
 9. STATE TAG: the VERY LAST LINE of your reply must always be exactly one \
    tag in this exact form (English keys, literal brackets/semicolons):
    [STATE:HP=current/max;MONEY=amount;INV=item, item, item]
+   - Before writing it, check the "CURRENT STATE" line given to you in the \
+     prompt (when present) — it is the ground truth going into this turn. \
+     Copy each value forward EXACTLY as given unless something in THIS \
+     specific turn changed it (damage, healing, a purchase, a find, using \
+     an item). Never reset, round, or reinvent HP/MONEY/INV from scratch — \
+     always start from the given values and adjust only what actually \
+     changed.
    - HP is mandatory (current/max as integers).
    - MONEY is the character's current funds as a short label (e.g. "45" or \
      "45 credits" or "12 gold") — include it whenever the world/character \
@@ -156,6 +163,31 @@ def parse_state_tag(text: str) -> tuple[str, dict]:
     return clean, state
 
 
+STATE_FIELDS = {"hp", "max_hp", "money", "inventory"}
+
+
+def _background_dict(character: dict) -> dict:
+    """Stable facts about the character (description, category, etc.) —
+    everything except the fields that change turn to turn."""
+    return {k: v for k, v in character.items() if k not in STATE_FIELDS}
+
+
+def _state_line(character: dict) -> str:
+    """Render current HP/money/inventory as one explicit, unambiguous
+    line — kept separate from the character sheet dump and placed right
+    before the player's action so the model can't lose track of it."""
+    hp = character.get("hp")
+    max_hp = character.get("max_hp")
+    parts = []
+    if hp is not None and max_hp:
+        parts.append(f"HP={hp}/{max_hp}")
+    if character.get("money"):
+        parts.append(f"MONEY={character['money']}")
+    if character.get("inventory"):
+        parts.append(f"INV={character['inventory']}")
+    return "; ".join(parts) if parts else f"HP={DEFAULT_HP}/{DEFAULT_HP}"
+
+
 def _status_note(character: dict) -> str:
     hp = character.get("hp")
     max_hp = character.get("max_hp")
@@ -171,8 +203,9 @@ def _status_note(character: dict) -> str:
 
 def build_context(summary: str, recent_turns: list[str], character: dict) -> str:
     parts = []
-    if character:
-        parts.append(f"Character sheet: {character}")
+    background = _background_dict(character)
+    if background:
+        parts.append(f"Character background (stable, unrelated to current HP/money/items): {background}")
     note = _status_note(character)
     if note:
         parts.append(note)
@@ -191,9 +224,14 @@ def generate_story_turn(
     language_name: str,
 ) -> str:
     context = build_context(summary, recent_turns, character)
+    state_line = _state_line(character)
     prompt = (
         f"Respond in: {language_name}.\n\n"
-        f"{context}\n\nPlayer's action now: {player_input}"
+        f"{context}\n\n"
+        f"CURRENT STATE (ground truth going into this turn — copy these exact values into "
+        f"your closing [STATE:...] tag unless something in THIS turn explicitly changes them; "
+        f"never invent or reset them): {state_line}\n\n"
+        f"Player's action now: {player_input}"
     )
     model = get_model()
     response = model.generate_content(prompt)

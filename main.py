@@ -408,8 +408,12 @@ async def advance_story(message_or_callback, user_id: int, player_input: str):
 
         clean_text, parsed_state = gemini_client.parse_state_tag(story_text)
         if "hp" in parsed_state:
-            game.character["hp"] = parsed_state["hp"]
-            game.character["max_hp"] = parsed_state.get("max_hp", game.character.get("max_hp"))
+            # max_hp shouldn't drift turn to turn — lock it once set, so a
+            # model slip can't silently reset the character's max health.
+            if not game.character.get("max_hp"):
+                game.character["max_hp"] = parsed_state.get("max_hp")
+            max_hp = game.character.get("max_hp") or parsed_state["hp"]
+            game.character["hp"] = max(0, min(parsed_state["hp"], max_hp))
         if "money" in parsed_state:
             game.character["money"] = parsed_state["money"]
         if "inventory" in parsed_state:
