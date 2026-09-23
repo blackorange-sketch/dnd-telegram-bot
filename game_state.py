@@ -22,7 +22,7 @@ class GameState:
     character: dict = field(default_factory=dict)
     summary: str = ""
     recent_turns: list[str] = field(default_factory=list)
-    language: str = "Ukrainian"
+    language: str = "uk"
 
     def to_json(self) -> str:
         return json.dumps({
@@ -40,7 +40,7 @@ class GameState:
             character=data.get("character", {}),
             summary=data.get("summary", ""),
             recent_turns=data.get("recent_turns", []),
-            language=data.get("language", "Ukrainian"),
+            language=data.get("language", "uk"),
         )
 
     def add_turn(self, text: str) -> None:

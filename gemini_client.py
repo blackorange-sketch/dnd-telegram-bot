@@ -12,7 +12,7 @@ import google.generativeai as genai
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
-DEFAULT_HP = 20
+DEFAULT_HP = 30
 
 # Matches a trailing "[HP:12/20]" tag the model is instructed to always append.
 HP_TAG_RE = re.compile(r"\[HP:\s*(\d+)\s*/\s*(\d+)\s*\]\s*$")
@@ -29,15 +29,21 @@ Follow these rules on every reply:
 3. If a dice roll result is present in the user's message, use it to decide \
    success, failure, or a critical outcome (a natural 20 is a critical \
    success, a natural 1 is a critical failure). Never invent your own roll.
-4. Track the character's HP (health). If the context shows the character is \
-   wounded (HP below half) or critically wounded (HP below a quarter), this \
-   MUST visibly affect the narration and the difficulty of the situation: \
-   they move slower, are more vulnerable, may need to rest, retreat, or use \
-   an item. Injuries have real narrative and tactical consequences on the \
-   choices you offer next.
-5. When an action in the story causes damage or healing, decide a reasonable \
-   amount yourself and update the HP accordingly.
-6. Always end with a numbered list of 2-4 action options ("1)", "2)", etc). \
+4. Track the character's HP (health), but keep the adventure's pace long \
+   and forgiving. Most actions, even failed ones, should NOT cause damage at \
+   all — only apply damage when the fiction clearly involves a real physical \
+   danger (combat, a fall, a trap, etc.), and even then keep it small \
+   (typically 5-15% of max HP for a normal hit, more only for a rare, \
+   clearly telegraphed severe threat). Do not let HP drop to 0 except after \
+   many turns of accumulated, ignored danger — the story should comfortably \
+   run for dozens of turns before that becomes a realistic risk.
+5. If the character is wounded (HP below ~45%) or critically wounded (HP \
+   below ~20%), let this show up mildly in the narration (they're a bit \
+   slower, more cautious) without shutting down their options — the player \
+   should still have real choices, just with a bit more risk and color.
+6. When an action causes damage or healing, decide a reasonable small amount \
+   yourself and update the HP accordingly.
+7. Always end with a numbered list of 2-4 action options ("1)", "2)", etc). \
    Occasionally mark an option as requiring a dice roll, e.g. \
    "(requires a d20 roll)".
 7. Keep the tone adventurous, not overly grim, with no graphic violence or \
@@ -87,10 +93,10 @@ def _status_note(character: dict) -> str:
     if hp is None or not max_hp:
         return ""
     ratio = hp / max_hp
-    if ratio <= 0.25:
-        return "STATUS: character is critically wounded — this must strongly limit their options."
-    if ratio <= 0.5:
-        return "STATUS: character is wounded — actions should be visibly harder."
+    if ratio <= 0.2:
+        return "STATUS: character is critically wounded — reflect this mildly in narration, but they still have real options."
+    if ratio <= 0.45:
+        return "STATUS: character is wounded — reflect this mildly in narration."
     return ""
 
 

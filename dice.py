@@ -35,13 +35,13 @@ def roll_check(difficulty_class: int, sides: int = 20, modifier: int = 0) -> tup
 
 
 def hp_penalty(hp: int, max_hp: int) -> int:
-    """Injuries make actions harder: this returns a negative modifier to
-    apply to rolls based on how wounded the character currently is."""
+    """Injuries make actions a bit harder, but only when seriously wounded —
+    kept mild so the story can keep going instead of spiraling quickly."""
     if not max_hp or max_hp <= 0:
         return 0
     ratio = hp / max_hp
-    if ratio <= 0.25:
-        return -4
-    if ratio <= 0.5:
+    if ratio <= 0.2:
         return -2
+    if ratio <= 0.45:
+        return -1
     return 0
