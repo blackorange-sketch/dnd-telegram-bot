@@ -5,26 +5,46 @@ GEMINI_MODEL if you want richer prose from gemini-2.5-flash instead.
 """
 
 import os
+import re
 
 import google.generativeai as genai
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
-SYSTEM_PROMPT = """\
-Ти — досвідчений Майстер Підземель (DM), що веде інтерактивну текстову \
-пригоду в стилі DnD українською мовою.
+DEFAULT_HP = 20
 
-Правила твоєї відповіді:
-1. Опиши коротко (3-6 речень) наслідки останньої дії гравця та поточну сцену.
-2. Якщо гравцю потрібно було кинути кубик — тобі повідомлять результат кидка \
-   окремо в повідомленні користувача; враховуй його у розповіді (успіх/провал/\
-   критичний успіх на 20/критичний провал на 1).
-3. Завжди завершуй відповідь списком 2-4 варіантів дій, пронумерованих \
-   "1)", "2)" тощо. Один із варіантів час від часу може вимагати кидка кубика \
-   (напиши прямо: "(потрібен кидок d20)").
-4. Тримай тон пригодницьким, не надто похмурим, без жорстокого насильства \
-   чи відверто заборонених тем.
-5. Не вигадуй результат кубика сам — його завжди рахує гра.
+# Matches a trailing "[HP:12/20]" tag the model is instructed to always append.
+HP_TAG_RE = re.compile(r"\[HP:\s*(\d+)\s*/\s*(\d+)\s*\]\s*$")
+
+SYSTEM_PROMPT = """\
+You are an experienced Dungeon Master running an interactive text RPG \
+adventure.
+
+Follow these rules on every reply:
+1. Always write your entire reply in the language given by the "Respond in:" \
+   instruction found in the user's message. Never mix languages.
+2. Briefly (3-6 sentences) describe the outcome of the player's last action \
+   and the current scene.
+3. If a dice roll result is present in the user's message, use it to decide \
+   success, failure, or a critical outcome (a natural 20 is a critical \
+   success, a natural 1 is a critical failure). Never invent your own roll.
+4. Track the character's HP (health). If the context shows the character is \
+   wounded (HP below half) or critically wounded (HP below a quarter), this \
+   MUST visibly affect the narration and the difficulty of the situation: \
+   they move slower, are more vulnerable, may need to rest, retreat, or use \
+   an item. Injuries have real narrative and tactical consequences on the \
+   choices you offer next.
+5. When an action in the story causes damage or healing, decide a reasonable \
+   amount yourself and update the HP accordingly.
+6. Always end with a numbered list of 2-4 action options ("1)", "2)", etc). \
+   Occasionally mark an option as requiring a dice roll, e.g. \
+   "(requires a d20 roll)".
+7. Keep the tone adventurous, not overly grim, with no graphic violence or \
+   disallowed content.
+8. The VERY LAST LINE of your reply must always be exactly one tag in the \
+   form [HP:current/max] reflecting the character's HP after this turn's \
+   events (unchanged if nothing affected it this turn). Never omit this tag, \
+   never explain it, never put anything after it.
 """
 
 
@@ -49,20 +69,56 @@ def get_model():
     return _model
 
 
+def parse_hp_tag(text: str) -> tuple[str, int | None, int | None]:
+    """Strip the trailing [HP:x/y] tag from a reply and return
+    (clean_text, hp, max_hp). hp/max_hp are None if the tag wasn't found."""
+    match = HP_TAG_RE.search(text.strip())
+    if not match:
+        return text.strip(), None, None
+    hp, max_hp = int(match.group(1)), int(match.group(2))
+    clean = HP_TAG_RE.sub("", text).strip()
+    return clean, hp, max_hp
+
+
+def _status_note(character: dict) -> str:
+    hp = character.get("hp")
+    max_hp = character.get("max_hp")
+    if hp is None or not max_hp:
+        return ""
+    ratio = hp / max_hp
+    if ratio <= 0.25:
+        return "STATUS: character is critically wounded — this must strongly limit their options."
+    if ratio <= 0.5:
+        return "STATUS: character is wounded — actions should be visibly harder."
+    return ""
+
+
 def build_context(summary: str, recent_turns: list[str], character: dict) -> str:
     parts = []
     if character:
-        parts.append(f"Персонаж гравця: {character}")
+        parts.append(f"Character sheet: {character}")
+    note = _status_note(character)
+    if note:
+        parts.append(note)
     if summary:
-        parts.append(f"Стислий підсумок історії дотепер: {summary}")
+        parts.append(f"Story summary so far: {summary}")
     if recent_turns:
-        parts.append("Останні репліки:\n" + "\n".join(recent_turns))
+        parts.append("Recent exchanges:\n" + "\n".join(recent_turns))
     return "\n\n".join(parts)
 
 
-def generate_story_turn(summary: str, recent_turns: list[str], character: dict, player_input: str) -> str:
+def generate_story_turn(
+    summary: str,
+    recent_turns: list[str],
+    character: dict,
+    player_input: str,
+    language_name: str,
+) -> str:
     context = build_context(summary, recent_turns, character)
-    prompt = f"{context}\n\nДія гравця зараз: {player_input}"
+    prompt = (
+        f"Respond in: {language_name}.\n\n"
+        f"{context}\n\nPlayer's action now: {player_input}"
+    )
     model = get_model()
     response = model.generate_content(prompt)
     return response.text.strip()
@@ -73,6 +129,7 @@ def generate_new_adventure_opening(
     category_hint: str,
     world_description: str | None,
     character_brief: str,
+    language_name: str,
 ) -> str:
     """Generate the opening scene for a brand-new adventure.
 
@@ -82,16 +139,19 @@ def generate_new_adventure_opening(
     either the player's own description or gender/age for random generation.
     """
     if world_description:
-        world_part = f"Опис світу від гравця: {world_description}"
+        world_part = f"World description from the player: {world_description}"
     else:
-        world_part = f"Вигадай сам світ, що пасує категорії ({category_hint})."
+        world_part = f"Invent a world yourself that fits this category ({category_hint})."
 
     prompt = (
-        f"Категорія світу: {category_label} ({category_hint}).\n"
+        f"Respond in: {language_name}.\n\n"
+        f"World category: {category_label} ({category_hint}).\n"
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
-        "Почни нову коротку пригоду: опиши місце дії, зав'язку та стартову сцену "
-        "з персонажем, а тоді список варіантів дій."
+        f"Start the character at full health: [HP:{DEFAULT_HP}/{DEFAULT_HP}] unless the "
+        "character description implies a different starting max HP, in which case use that.\n\n"
+        "Begin a new short adventure: describe the setting, the hook, and the opening scene "
+        "with the character, then the list of action options."
     )
     model = get_model()
     response = model.generate_content(prompt)

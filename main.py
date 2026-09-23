@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 
 import dice
 import gemini_client
+import languages as lang
 import world_categories as wc
 from game_state import GameState, delete_state, load_state, save_state
 
@@ -34,6 +35,7 @@ dp = Dispatcher(storage=MemoryStorage())
 
 
 class Creation(StatesGroup):
+    choosing_language = State()
     choosing_category = State()
     entering_world_description = State()
     choosing_character_method = State()
@@ -45,6 +47,12 @@ class Creation(StatesGroup):
 # ---------------------------------------------------------------------------
 # Keyboards
 # ---------------------------------------------------------------------------
+
+def language_keyboard() -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=lang.label_for(key), callback_data=f"lang:{key}")]
+            for key in lang.all_keys()]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 def category_keyboard() -> InlineKeyboardMarkup:
     rows = []
@@ -91,6 +99,10 @@ def extract_options(story_text: str) -> list[str]:
     return re.findall(r"^\s*\d\)\s*.+$", story_text, flags=re.MULTILINE)
 
 
+def hp_status_line(hp: int, max_hp: int) -> str:
+    return f"❤️ HP: {hp}/{max_hp}"
+
+
 # ---------------------------------------------------------------------------
 # Basic commands
 # ---------------------------------------------------------------------------
@@ -100,8 +112,8 @@ async def cmd_start(message: Message):
     await message.answer(
         "Вітаю у текстовій DnD-пригоді!\n\n"
         "Команди:\n"
-        "/new — почати нову пригоду (обрати світ і персонажа)\n"
-        "/roll — кинути кубик d20 вручну\n"
+        "/new — почати нову пригоду (мова, світ, персонаж)\n"
+        "/roll — кинути кубик d20 вручну (тестовий, без прив'язки до гри)\n"
         "/reset — стерти прогрес і почати з нуля\n\n"
         "Після створення пригоди просто пиши дії текстом або тисни кнопки."
     )
@@ -121,15 +133,28 @@ async def cmd_roll(message: Message):
 
 
 # ---------------------------------------------------------------------------
-# Step 1: /new -> choose world category
+# Step 1: /new -> choose language
 # ---------------------------------------------------------------------------
 
 @dp.message(Command("new"))
 async def cmd_new(message: Message, state: FSMContext):
     await state.clear()
-    await state.set_state(Creation.choosing_category)
-    await message.answer("Обери категорію світу для пригоди:", reply_markup=category_keyboard())
+    await state.set_state(Creation.choosing_language)
+    await message.answer("Обери мову пригоди:", reply_markup=language_keyboard())
 
+
+@dp.callback_query(Creation.choosing_language, F.data.startswith("lang:"))
+async def process_language(callback: CallbackQuery, state: FSMContext):
+    key = callback.data.split(":", 1)[1]
+    await state.update_data(language_key=key, language_name=lang.prompt_name_for(key))
+    await callback.answer(lang.label_for(key))
+    await callback.message.answer("Обери категорію світу для пригоди:", reply_markup=category_keyboard())
+    await state.set_state(Creation.choosing_category)
+
+
+# ---------------------------------------------------------------------------
+# Step 2: choose world category
+# ---------------------------------------------------------------------------
 
 @dp.callback_query(Creation.choosing_category, F.data.startswith("cat:"))
 async def process_category(callback: CallbackQuery, state: FSMContext):
@@ -147,7 +172,7 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
 
 
 # ---------------------------------------------------------------------------
-# Step 2: world description (custom text or random)
+# Step 3: world description (custom text or random)
 # ---------------------------------------------------------------------------
 
 @dp.message(Creation.entering_world_description)
@@ -169,7 +194,7 @@ async def ask_character_method(message: Message, state: FSMContext):
 
 
 # ---------------------------------------------------------------------------
-# Step 3: character — manual description OR random by gender/age
+# Step 4: character — manual description OR random by gender/age
 # ---------------------------------------------------------------------------
 
 @dp.callback_query(Creation.choosing_character_method, F.data.startswith("charmethod:"))
@@ -218,19 +243,20 @@ async def finalize_creation(message: Message, state: FSMContext):
     data = await state.get_data()
     category_key = data.get("category_key", random.choice(wc.all_keys()))
     world_description = data.get("world_description")
+    language_name = data.get("language_name", lang.prompt_name_for(lang.DEFAULT_LANGUAGE))
 
     if "character_description" in data:
         character_brief = (
-            f"Гравець описав персонажа так: {data['character_description']}. "
-            "Використай цей опис, за потреби доповни дрібними деталями (ім'я, клас, риси)."
+            f"The player described the character like this: {data['character_description']}. "
+            "Use this description, filling in small extra details if needed (name, class, traits)."
         )
         character_record = {"description": data["character_description"]}
     else:
         gender = data.get("gender", "будь-яка")
         age = data.get("age", "будь-який")
         character_brief = (
-            f"Придумай персонажа сам: стать — {gender}, вік — {age}. "
-            "Вигадай ім'я, клас/професію та коротку передісторію, що пасує світу."
+            f"Invent the character yourself: gender — {gender}, age — {age}. "
+            "Make up a name, class/profession, and a short backstory that fits the world."
         )
         character_record = {"gender": gender, "age": age, "generated": True}
 
@@ -242,6 +268,7 @@ async def finalize_creation(message: Message, state: FSMContext):
             category_hint=wc.description_for(category_key),
             world_description=world_description,
             character_brief=character_brief,
+            language_name=language_name,
         )
     except Exception as e:
         logger.exception("Gemini error")
@@ -249,17 +276,23 @@ async def finalize_creation(message: Message, state: FSMContext):
         await state.clear()
         return
 
+    clean_text, hp, max_hp = gemini_client.parse_hp_tag(opening)
+    hp = hp if hp is not None else gemini_client.DEFAULT_HP
+    max_hp = max_hp if max_hp is not None else gemini_client.DEFAULT_HP
+
     character_record["category"] = category_key
     character_record["world_description"] = world_description
+    character_record["hp"] = hp
+    character_record["max_hp"] = max_hp
 
-    game = GameState(user_id=message.from_user.id, character=character_record)
-    game.add_turn(f"[DM]: {opening}")
+    game = GameState(user_id=message.from_user.id, character=character_record, language=language_name)
+    game.add_turn(f"[DM]: {clean_text}")
     save_state(game)
     await state.clear()
 
-    options = extract_options(opening)
+    options = extract_options(clean_text)
     kb = action_keyboard(options) if options else None
-    await message.answer(opening, reply_markup=kb)
+    await message.answer(f"{clean_text}\n\n{hp_status_line(hp, max_hp)}", reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------
@@ -280,18 +313,31 @@ async def advance_story(message_or_callback, user_id: int, player_input: str):
             recent_turns=game.recent_turns,
             character=game.character,
             player_input=player_input,
+            language_name=game.language,
         )
     except Exception as e:
         logger.exception("Gemini error")
         await message_or_callback.answer(f"Помилка звернення до Gemini: {e}")
         return
 
-    game.add_turn(f"[DM]: {story_text}")
+    clean_text, hp, max_hp = gemini_client.parse_hp_tag(story_text)
+    if hp is not None:
+        game.character["hp"] = hp
+        game.character["max_hp"] = max_hp if max_hp is not None else game.character.get("max_hp", hp)
+
+    game.add_turn(f"[DM]: {clean_text}")
     save_state(game)
 
-    options = extract_options(story_text)
+    options = extract_options(clean_text)
     kb = action_keyboard(options) if options else None
-    await message_or_callback.answer(story_text, reply_markup=kb)
+
+    reply_text = clean_text
+    if hp is not None:
+        reply_text += f"\n\n{hp_status_line(hp, game.character.get('max_hp', hp))}"
+        if hp <= 0:
+            reply_text += "\n\n💀 Персонаж втратив свідомість/загинув. Напиши /new, щоб почати заново."
+
+    await message_or_callback.answer(reply_text, reply_markup=kb)
 
 
 @dp.message(F.text & ~F.text.startswith("/"))
@@ -314,13 +360,23 @@ async def handle_choice(callback: CallbackQuery):
 @dp.callback_query(F.data.startswith("roll:"))
 async def handle_roll_button(callback: CallbackQuery):
     sides = int(callback.data.split(":")[1])
-    result = dice.roll(sides)
-    await callback.answer(f"Випало: {result.value}")
-    await advance_story(
-        callback.message,
-        callback.from_user.id,
-        f"Я кинув кубик d{sides} і випало {result.value}.",
-    )
+    game = load_state(callback.from_user.id)
+    hp = game.character.get("hp", gemini_client.DEFAULT_HP) if game else gemini_client.DEFAULT_HP
+    max_hp = game.character.get("max_hp", gemini_client.DEFAULT_HP) if game else gemini_client.DEFAULT_HP
+    penalty = dice.hp_penalty(hp, max_hp)
+
+    result = dice.roll(sides, modifier=penalty)
+    await callback.answer(f"Випало: {result.value}" + (f" (штраф {penalty} через поранення)" if penalty else ""))
+
+    if penalty:
+        description = (
+            f"Кидаю кубик d{sides}: базове значення {result.value}, "
+            f"штраф {penalty} через поранення, підсумок {result.total}."
+        )
+    else:
+        description = f"Кидаю кубик d{sides}: випало {result.value}."
+
+    await advance_story(callback.message, callback.from_user.id, description)
 
 
 async def main():

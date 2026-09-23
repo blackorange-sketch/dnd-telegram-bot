@@ -32,3 +32,16 @@ def roll_check(difficulty_class: int, sides: int = 20, modifier: int = 0) -> tup
     """Roll against a DC (difficulty class). Returns (result, success)."""
     result = roll(sides=sides, modifier=modifier)
     return result, result.total >= difficulty_class
+
+
+def hp_penalty(hp: int, max_hp: int) -> int:
+    """Injuries make actions harder: this returns a negative modifier to
+    apply to rolls based on how wounded the character currently is."""
+    if not max_hp or max_hp <= 0:
+        return 0
+    ratio = hp / max_hp
+    if ratio <= 0.25:
+        return -4
+    if ratio <= 0.5:
+        return -2
+    return 0
