@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+game_data.sqlite3
+venv/
+.venv/
