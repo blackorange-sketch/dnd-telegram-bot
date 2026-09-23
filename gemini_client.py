@@ -1,7 +1,8 @@
 """Thin wrapper around the Gemini API for generating DnD-style narration.
 
-Uses the free-tier-friendly gemini-2.5-flash-lite model by default; swap
-GEMINI_MODEL if you want richer prose from gemini-2.5-flash instead.
+Uses the free-tier-friendly gemini-3.5-flash-lite model by default (the 2.5
+line was retired for new users in late 2026); swap GEMINI_MODEL if you want
+richer prose from gemini-3.6-flash instead.
 """
 
 import os
@@ -9,7 +10,7 @@ import re
 
 import google.generativeai as genai
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 DEFAULT_HP = 20
 
