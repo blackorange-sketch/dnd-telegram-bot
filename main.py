@@ -181,10 +181,19 @@ async def cmd_play(message: Message):
             "(посилання на цей сервіс, наприклад https://your-app.up.railway.app)."
         )
         return
+
+    url = f"{PUBLIC_URL.rstrip('/')}/miniapp"
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=ui.t(lang_key, "open_miniapp_button"), web_app=WebAppInfo(url=f"{PUBLIC_URL}/miniapp"))
+        InlineKeyboardButton(text=ui.t(lang_key, "open_miniapp_button"), web_app=WebAppInfo(url=url))
     ]])
-    await message.answer(ui.t(lang_key, "play_intro"), reply_markup=kb)
+    try:
+        await message.answer(ui.t(lang_key, "play_intro"), reply_markup=kb)
+    except Exception as e:
+        logger.exception("Failed to send Mini App button")
+        await message.answer(
+            f"Не вдалося відкрити Mini App: {e}\n\n"
+            f"Перевір, що PUBLIC_URL коректний і https: {url}"
+        )
 
 
 # ---------------------------------------------------------------------------
