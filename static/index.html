@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>DnD Adventure</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
   :root {
     color-scheme: light dark;
@@ -75,6 +76,65 @@
     border-radius: 12px;
     background: var(--card);
     font-size: 15px;
+  }
+  .dice-anim {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 16px;
+    perspective: 600px;
+  }
+  .die-face {
+    width: 110px;
+    height: 110px;
+    position: relative;
+  }
+  .die-canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .die-number {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 24px;
+    font-weight: 800;
+    color: #fff;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+  }
+  .die-face.settled {
+    animation: dice-pop 0.35s ease;
+  }
+  @keyframes dice-pop {
+    0%   { transform: scale(1.3); }
+    60%  { transform: scale(0.92); }
+    100% { transform: scale(1); }
+  }
+  .die-shadow {
+    width: 52px;
+    height: 11px;
+    margin-top: 12px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    filter: blur(2px);
+  }
+  .die-shadow.spinning {
+    animation: shadow-pulse 0.5s linear infinite;
+  }
+  .die-shadow.settled {
+    animation: shadow-land 0.4s ease;
+  }
+  @keyframes shadow-pulse {
+    0%, 100% { transform: scale(1);   opacity: 0.4; }
+    50%      { transform: scale(0.65); opacity: 0.22; }
+  }
+  @keyframes shadow-land {
+    0%   { transform: scale(0.55); opacity: 0.15; }
+    50%  { transform: scale(1.2);  opacity: 0.45; }
+    100% { transform: scale(1);    opacity: 0.4; }
   }
   #story {
     white-space: pre-wrap;
@@ -200,6 +260,13 @@
 
   <div id="storyView" class="view active">
     <div id="status"></div>
+    <div class="dice-anim" id="diceAnim">
+      <div class="die-face" id="dieFace">
+        <canvas id="diceCanvas" class="die-canvas"></canvas>
+        <span class="die-number" id="dieNumber">?</span>
+      </div>
+      <div class="die-shadow" id="dieShadow"></div>
+    </div>
     <div id="rollResult"></div>
     <div id="story">Завантаження...</div>
     <div id="options"></div>
@@ -231,6 +298,108 @@ tg.expand();
 const initData = tg.initData;
 
 let lastCharacter = null;
+let diceInterval = null;
+
+// --- Real 3D d20 (icosahedron) via three.js ---
+let scene, camera, renderer, dieMesh;
+let rotSpeed = { x: 0.002, y: 0.004, z: 0.001 };
+let decelInterval = null;
+
+function initDiceScene() {
+  const canvas = document.getElementById("diceCanvas");
+  const size = 110;
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(35, 1, 0.1, 10);
+  camera.position.set(0, 0, 4.2);
+
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(size, size, false);
+
+  const geometry = new THREE.IcosahedronGeometry(1.15, 0); // radius, detail=0 -> exactly 20 faces
+  const material = new THREE.MeshPhongMaterial({
+    color: 0x5b6373,
+    flatShading: true,
+    shininess: 30,
+    specular: 0x333333,
+  });
+  dieMesh = new THREE.Mesh(geometry, material);
+  scene.add(dieMesh);
+
+  const edges = new THREE.EdgesGeometry(geometry);
+  const edgeLines = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x14151a }));
+  dieMesh.add(edgeLines);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const key = new THREE.DirectionalLight(0xffffff, 0.9);
+  key.position.set(2, 3, 4);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0x88aaff, 0.35);
+  fill.position.set(-3, -1, -2);
+  scene.add(fill);
+
+  renderDiceLoop();
+}
+
+function renderDiceLoop() {
+  requestAnimationFrame(renderDiceLoop);
+  if (!dieMesh) return;
+  dieMesh.rotation.x += rotSpeed.x;
+  dieMesh.rotation.y += rotSpeed.y;
+  dieMesh.rotation.z += rotSpeed.z;
+  renderer.render(scene, camera);
+}
+
+function startDiceAnimation(sides) {
+  const wrap = document.getElementById("diceAnim");
+  const face = document.getElementById("dieFace");
+  const shadow = document.getElementById("dieShadow");
+  const number = document.getElementById("dieNumber");
+  clearInterval(decelInterval);
+  wrap.style.display = "flex";
+  face.classList.remove("settled");
+  shadow.classList.remove("settled");
+  shadow.classList.add("spinning");
+  rotSpeed = { x: 0.18, y: 0.24, z: 0.1 };
+  number.textContent = "?";
+  diceInterval = setInterval(() => {
+    number.textContent = String(1 + Math.floor(Math.random() * sides));
+  }, 70);
+}
+
+function stopDiceAnimation(finalValue) {
+  return new Promise(resolve => {
+    clearInterval(diceInterval);
+    const wrap = document.getElementById("diceAnim");
+    const face = document.getElementById("dieFace");
+    const shadow = document.getElementById("dieShadow");
+    const number = document.getElementById("dieNumber");
+
+    number.textContent = String(finalValue ?? "?");
+    shadow.classList.remove("spinning");
+    shadow.classList.add("settled");
+    face.classList.add("settled");
+
+    // Ease the spin down to a slow idle instead of stopping abruptly.
+    decelInterval = setInterval(() => {
+      rotSpeed.x *= 0.85;
+      rotSpeed.y *= 0.85;
+      rotSpeed.z *= 0.85;
+      if (Math.abs(rotSpeed.y) < 0.004) {
+        clearInterval(decelInterval);
+        rotSpeed = { x: 0.002, y: 0.004, z: 0.001 };
+      }
+    }, 40);
+
+    setTimeout(() => {
+      wrap.style.display = "none";
+      face.classList.remove("settled");
+      shadow.classList.remove("settled");
+      resolve();
+    }, 650);
+  });
+}
 
 function switchTab(name) {
   document.getElementById("storyView").classList.toggle("active", name === "story");
@@ -268,7 +437,7 @@ function renderOptions(options) {
     const btn = document.createElement("button");
     btn.className = "btn";
     btn.textContent = (i + 1) + ") " + opt.text + (opt.requires_roll ? " 🎲" : "");
-    btn.onclick = () => sendChoice(i + 1);
+    btn.onclick = () => sendChoice(i + 1, opt.requires_roll);
     el.appendChild(btn);
   });
 }
@@ -379,15 +548,19 @@ function handleActionResult(data) {
   }
 }
 
-async function sendChoice(index) {
+async function sendChoice(index, requiresRoll) {
+  if (requiresRoll) startDiceAnimation(20);
   setLoading();
   const data = await api("/api/action", { type: "choice", index });
+  if (requiresRoll) await stopDiceAnimation(data.roll ? data.roll.value : null);
   handleActionResult(data);
 }
 
 async function sendManualRoll() {
+  startDiceAnimation(20);
   setLoading();
   const data = await api("/api/action", { type: "roll", sides: 20 });
+  await stopDiceAnimation(data.roll ? data.roll.value : null);
   handleActionResult(data);
 }
 
@@ -401,6 +574,7 @@ async function sendFreeText() {
   handleActionResult(data);
 }
 
+initDiceScene();
 loadState();
 </script>
 </body>
