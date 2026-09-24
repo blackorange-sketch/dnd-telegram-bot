@@ -14,6 +14,8 @@
     --btn: var(--tg-theme-button-color, #2ea6ff);
     --btn-text: var(--tg-theme-button-text-color, #ffffff);
     --card: rgba(255, 255, 255, 0.06);
+    --hp: #e5484d;
+    --attr: #2ea6ff;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -25,8 +27,40 @@
   body {
     padding: 16px;
     padding-top: calc(16px + env(safe-area-inset-top, 0px));
-    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
   }
+
+  /* --- Tabs (fixed bottom bar) --- */
+  #tabs {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    background: var(--bg);
+    border-top: 1px solid var(--card);
+    z-index: 10;
+  }
+  .tab-btn {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: 10px;
+    background: var(--card);
+    color: var(--hint);
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .tab-btn.active {
+    background: var(--btn);
+    color: var(--btn-text);
+  }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* --- Story view --- */
   #status {
     font-size: 14px;
     color: var(--hint);
@@ -35,9 +69,7 @@
     gap: 12px;
     flex-wrap: wrap;
   }
-  #rollResult {
-    margin-bottom: 12px;
-  }
+  #rollResult { margin-bottom: 12px; }
   .roll-card {
     padding: 10px 14px;
     border-radius: 12px;
@@ -50,11 +82,6 @@
     font-size: 16px;
     margin-bottom: 18px;
     min-height: 40px;
-  }
-  #inventory {
-    font-size: 13px;
-    color: var(--hint);
-    margin-bottom: 16px;
   }
   .btn {
     display: block;
@@ -70,11 +97,7 @@
     cursor: pointer;
   }
   .btn:active { opacity: 0.8; }
-  #textRow {
-    display: flex;
-    gap: 8px;
-    margin-top: 14px;
-  }
+  #textRow { display: flex; gap: 8px; margin-top: 14px; }
   #freeText {
     flex: 1;
     padding: 12px;
@@ -97,18 +120,108 @@
     border: 1px solid var(--hint);
     color: var(--text);
   }
+
+  /* --- Character view --- */
+  .section-title {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--hint);
+    margin: 18px 0 8px;
+  }
+  .section-title:first-child { margin-top: 0; }
+  .hp-bar-track {
+    height: 14px;
+    border-radius: 8px;
+    background: var(--card);
+    overflow: hidden;
+  }
+  .hp-bar-fill {
+    height: 100%;
+    background: var(--hp);
+    transition: width 0.3s ease;
+  }
+  .hp-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    margin-bottom: 6px;
+  }
+  .money-line {
+    font-size: 15px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--card);
+  }
+  .attr-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+  .attr-name { width: 40%; color: var(--hint); }
+  .attr-bar-track {
+    flex: 1;
+    height: 10px;
+    border-radius: 6px;
+    background: var(--card);
+    overflow: hidden;
+  }
+  .attr-bar-fill {
+    height: 100%;
+    background: var(--attr);
+  }
+  .attr-value { width: 24px; text-align: right; }
+  .inv-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .inv-item {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--card);
+    font-size: 13px;
+    line-height: 1.35;
+  }
+  .empty-note {
+    color: var(--hint);
+    font-size: 14px;
+  }
 </style>
 </head>
 <body>
-  <div id="status"></div>
-  <div id="rollResult"></div>
-  <div id="story">Завантаження...</div>
-  <div id="inventory"></div>
-  <div id="options"></div>
-  <button class="btn" id="diceBtn" onclick="sendManualRoll()">🎲 Кинути d20</button>
-  <div id="textRow">
-    <input id="freeText" placeholder="Опиши свою дію..." onkeydown="if(event.key==='Enter') sendFreeText()">
-    <button id="sendBtn" onclick="sendFreeText()">➤</button>
+
+  <div id="tabs">
+    <button class="tab-btn active" id="tabStoryBtn" onclick="switchTab('story')">🗺️ Історія</button>
+    <button class="tab-btn" id="tabCharBtn" onclick="switchTab('character')">🧙 Персонаж</button>
+  </div>
+
+  <div id="storyView" class="view active">
+    <div id="status"></div>
+    <div id="rollResult"></div>
+    <div id="story">Завантаження...</div>
+    <div id="options"></div>
+    <button class="btn" id="diceBtn" onclick="sendManualRoll()">🎲 Кинути d20</button>
+    <div id="textRow">
+      <input id="freeText" placeholder="Опиши свою дію..." onkeydown="if(event.key==='Enter') sendFreeText()">
+      <button id="sendBtn" onclick="sendFreeText()">➤</button>
+    </div>
+  </div>
+
+  <div id="characterView" class="view">
+    <div class="section-title">Здоров'я</div>
+    <div id="charHp"></div>
+
+    <div class="section-title">Гроші</div>
+    <div id="charMoney"></div>
+
+    <div class="section-title">Характеристики</div>
+    <div id="charAttrs"></div>
+
+    <div class="section-title">Інвентар</div>
+    <div id="charInventory"></div>
   </div>
 
 <script>
@@ -116,6 +229,16 @@ const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 const initData = tg.initData;
+
+let lastCharacter = null;
+
+function switchTab(name) {
+  document.getElementById("storyView").classList.toggle("active", name === "story");
+  document.getElementById("characterView").classList.toggle("active", name === "character");
+  document.getElementById("tabStoryBtn").classList.toggle("active", name === "story");
+  document.getElementById("tabCharBtn").classList.toggle("active", name === "character");
+  if (name === "character") renderCharacterView();
+}
 
 async function api(path, body) {
   const res = await fetch(path, {
@@ -132,13 +255,6 @@ function renderStatus(character) {
   let parts = [`❤️ ${character.hp ?? "?"}/${character.max_hp ?? "?"}`];
   if (character.money) parts.push(`💰 ${character.money}`);
   el.textContent = parts.join("   ");
-}
-
-function renderInventory(character) {
-  const el = document.getElementById("inventory");
-  const items = character && character.inventory;
-  if (!items || !items.length) { el.textContent = ""; return; }
-  el.textContent = "🎒 " + items.join(", ");
 }
 
 function renderStory(text) {
@@ -172,6 +288,66 @@ function renderRoll(roll) {
   el.innerHTML = `<div class="roll-card">🎲 d${roll.sides}: ${roll.value}${penaltyText} → підсумок ${roll.total}<br>${TIER_LABEL[roll.tier] || roll.tier}</div>`;
 }
 
+function renderCharacterView() {
+  const c = lastCharacter || {};
+
+  // HP bar
+  const hp = c.hp ?? 0;
+  const maxHp = c.max_hp ?? 0;
+  const pct = maxHp > 0 ? Math.max(0, Math.min(100, (hp / maxHp) * 100)) : 0;
+  document.getElementById("charHp").innerHTML = `
+    <div class="hp-label"><span>${hp} / ${maxHp}</span></div>
+    <div class="hp-bar-track"><div class="hp-bar-fill" style="width:${pct}%"></div></div>
+  `;
+
+  // Money
+  document.getElementById("charMoney").innerHTML = c.money
+    ? `<div class="money-line">💰 ${c.money}</div>`
+    : `<div class="empty-note">Невідомо</div>`;
+
+  // Attributes
+  const attrs = c.attributes || {};
+  const attrKeys = Object.keys(attrs);
+  const attrsEl = document.getElementById("charAttrs");
+  if (!attrKeys.length) {
+    attrsEl.innerHTML = `<div class="empty-note">Немає даних</div>`;
+  } else {
+    attrsEl.innerHTML = attrKeys.map(key => {
+      const raw = attrs[key];
+      const value = typeof raw === "number" ? raw : parseFloat(raw) || 0;
+      const barPct = Math.max(0, Math.min(100, (value / 10) * 100));
+      return `
+        <div class="attr-row">
+          <div class="attr-name">${key}</div>
+          <div class="attr-bar-track"><div class="attr-bar-fill" style="width:${barPct}%"></div></div>
+          <div class="attr-value">${raw}</div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  // Inventory
+  const items = c.inventory || [];
+  const invEl = document.getElementById("charInventory");
+  if (!items.length) {
+    invEl.innerHTML = `<div class="empty-note">Порожньо</div>`;
+  } else {
+    invEl.innerHTML = `<div class="inv-grid">` +
+      items.map(item => `<div class="inv-item">🎒 ${item}</div>`).join("") +
+      `</div>`;
+  }
+}
+
+function applyState(data) {
+  lastCharacter = data.character || null;
+  renderStatus(data.character);
+  renderStory(data.text);
+  renderOptions(data.options);
+  if (document.getElementById("characterView").classList.contains("active")) {
+    renderCharacterView();
+  }
+}
+
 function setLoading() {
   renderRoll(null);
   document.getElementById("options").innerHTML = "";
@@ -188,10 +364,7 @@ async function loadState() {
     );
     return;
   }
-  renderStatus(data.character);
-  renderInventory(data.character);
-  renderStory(data.text);
-  renderOptions(data.options);
+  applyState(data);
 }
 
 function handleActionResult(data) {
@@ -200,10 +373,7 @@ function handleActionResult(data) {
     return;
   }
   renderRoll(data.roll);
-  renderStatus(data.character);
-  renderInventory(data.character);
-  renderStory(data.text);
-  renderOptions(data.options);
+  applyState(data);
   if (data.defeated) {
     document.getElementById("story").textContent += "\n\n💀 Персонаж втратив свідомість.";
   }
