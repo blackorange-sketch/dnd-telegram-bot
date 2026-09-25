@@ -1,8 +1,8 @@
 """Thin wrapper around the Gemini API for generating DnD-style narration.
 
-Uses the free-tier-friendly gemini-3.5-flash-lite model by default (the 2.5
-line was retired for new users in late 2026); swap GEMINI_MODEL if you want
-richer prose from gemini-3.6-flash instead.
+Uses gemini-3.6-flash by default — noticeably better narration quality than
+3.5 Flash-Lite for a bit more cost per call. Set GEMINI_MODEL to
+"gemini-3.5-flash-lite" if you want the cheaper/faster tier instead.
 """
 
 import json
@@ -14,7 +14,7 @@ import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
 DEFAULT_HP = 30
 
@@ -58,7 +58,10 @@ Follow these rules on every reply:
    most narration natural and grounded.
 
 3. Briefly (3-6 sentences) describe the outcome of the player's last action \
-   and the current scene.
+   and the current scene. When a scene naturally involves talking to an NPC, \
+   bring it to life with a short line or two of actual spoken dialogue in \
+   quotes (not every turn — only when a conversation is genuinely happening) \
+   instead of just summarizing what was said.
 
 4. DICE OUTCOME TIERS: if the player's message includes a roll result, it \
    will contain one of these English tier keywords: critical_failure, \
@@ -136,7 +139,7 @@ Follow these rules on every reply:
     output one more JSON tag placed right before the STATE tag (same line \
     format rules apply):
     [ATTRS]{{"Label": value, "Label": value}}[/ATTRS]
-    Pick 2-4 short attribute labels in the target language that fit the \
+    Pick 4-5 short attribute labels in the target language that fit the \
     world and character (e.g. physical strength, intellect, agility, \
     willpower — whatever suits the setting), each an integer from 1 to 10. \
     Never output this tag on ordinary story turns — attributes are set \
@@ -356,7 +359,7 @@ def generate_new_adventure_opening(
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
         "THIS IS A NEW CHARACTER BEING CREATED — also invent, fitting the world and character: "
-        "2-4 short physical/mental attributes (see rule 10, the ATTRS tag), some starting money "
+        "4-5 short physical/mental attributes (see rule 10, the ATTRS tag), some starting money "
         "in a currency that fits the world, and 2-4 starting inventory items. Reflect the money "
         f"and inventory in the closing STATE tag, and the attributes in the ATTRS tag placed "
         f"right before it. Start at full health: hp=max_hp={DEFAULT_HP} unless the character "

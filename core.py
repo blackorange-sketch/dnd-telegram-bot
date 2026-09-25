@@ -8,7 +8,6 @@ import re
 import dice
 import gemini_client
 import languages as lang
-import ui_strings as ui
 import world_categories as wc
 from game_state import SUMMARY_EVERY_N_TURNS, GameState, save_state
 
@@ -18,9 +17,10 @@ OPTION_LINE_RE = re.compile(r"^\s*\d\)\s*.+$", re.MULTILINE)
 
 
 def format_options(story_text: str, lang_key: str) -> tuple[str, list[dict]]:
-    """Find numbered option lines, strip the internal [ROLL] marker and
-    replace it with a localized hint for display, and return the cleaned
-    text plus a list of {"text": ..., "requires_roll": bool} in order."""
+    """Find numbered option lines and pull them out into a list of
+    {"text": ..., "requires_roll": bool} (for rendering as buttons), and
+    return the narrative with those lines removed entirely — options are
+    meant to live only in the buttons, not duplicated in the story text."""
     options: list[dict] = []
 
     def repl(match: re.Match) -> str:
@@ -29,11 +29,10 @@ def format_options(story_text: str, lang_key: str) -> tuple[str, list[dict]]:
         clean_line = line.replace(gemini_client.ROLL_MARKER, "").rstrip()
         text_only = re.sub(r"^\s*\d\)\s*", "", clean_line)
         options.append({"text": text_only, "requires_roll": requires_roll})
-        if requires_roll:
-            clean_line += " " + ui.t(lang_key, "requires_roll_hint")
-        return clean_line
+        return ""
 
     new_text = OPTION_LINE_RE.sub(repl, story_text)
+    new_text = re.sub(r"\n{3,}", "\n\n", new_text).strip()
     return new_text, options
 
 

@@ -111,10 +111,15 @@ def gender_keyboard(lang_key: str) -> InlineKeyboardMarkup:
     ])
 
 
-def action_keyboard(option_count: int) -> InlineKeyboardMarkup:
-    buttons = [InlineKeyboardButton(text=str(i), callback_data=f"choice:{i}") for i in range(1, option_count + 1)]
-    buttons.append(InlineKeyboardButton(text="🎲 d20", callback_data="roll:20"))
-    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+def action_keyboard(options: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for i, opt in enumerate(options, start=1):
+        label = f"{i}) {opt['text']}"
+        if opt.get("requires_roll"):
+            label += " 🎲"
+        rows.append([InlineKeyboardButton(text=label[:64], callback_data=f"choice:{i}")])
+    rows.append([InlineKeyboardButton(text="🎲 d20", callback_data="roll:20")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def format_options(story_text: str, lang_key: str) -> tuple[str, list[dict]]:
@@ -423,7 +428,7 @@ async def finalize_creation(message: Message, user_id: int, state: FSMContext):
 
     await state.clear()
 
-    kb = action_keyboard(len(result["options"])) if result["options"] else None
+    kb = action_keyboard(result["options"]) if result["options"] else None
     reply_text = f"{result['text']}\n\n{status_line(lang_key, result['character'])}"
     await message.answer(reply_text, reply_markup=kb)
 
@@ -454,7 +459,7 @@ async def advance_story(message_or_callback, user_id: int, player_input: str):
             await message_or_callback.answer(ui.t(lang_key, "gemini_error", error=e))
             return
 
-        kb = action_keyboard(len(result["options"])) if result["options"] else None
+        kb = action_keyboard(result["options"]) if result["options"] else None
         reply_text = f"{result['text']}\n\n{status_line(lang_key, result['character'])}"
         if result["defeated"]:
             reply_text += f"\n\n{ui.t(lang_key, 'defeated')}"
