@@ -249,16 +249,94 @@
     color: var(--hint);
     font-size: 14px;
   }
+
+  /* --- Onboarding wizard --- */
+  #onboardingView { padding-bottom: 20px; }
+  .wiz-title {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 14px;
+  }
+  .wiz-subtitle {
+    font-size: 14px;
+    color: var(--hint);
+    margin-bottom: 12px;
+  }
+  .wiz-textarea {
+    width: 100%;
+    min-height: 90px;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--hint);
+    background: transparent;
+    color: var(--text);
+    font-size: 15px;
+    font-family: inherit;
+    resize: vertical;
+    margin-bottom: 10px;
+  }
+  .wiz-input {
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--hint);
+    background: transparent;
+    color: var(--text);
+    font-size: 15px;
+    margin-bottom: 10px;
+  }
+  .btn.secondary {
+    background: transparent;
+    border: 1px solid var(--hint);
+    color: var(--text);
+  }
+  .preview-card {
+    padding: 14px;
+    border-radius: 12px;
+    background: var(--card);
+    font-size: 15px;
+    line-height: 1.5;
+    margin-bottom: 14px;
+    white-space: pre-wrap;
+  }
+  .wiz-loading {
+    color: var(--hint);
+    font-size: 14px;
+    padding: 20px 0;
+    text-align: center;
+  }
+
+  /* --- Log (history) view --- */
+  .log-entry {
+    padding: 10px 14px;
+    border-radius: 12px;
+    margin-bottom: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+  .log-entry.player {
+    background: var(--btn);
+    color: var(--btn-text);
+    margin-left: 24px;
+  }
+  .log-entry.dm {
+    background: var(--card);
+    margin-right: 24px;
+  }
 </style>
 </head>
 <body>
 
-  <div id="tabs">
+  <div id="tabs" style="display:none;">
     <button class="tab-btn active" id="tabStoryBtn" onclick="switchTab('story')">🗺️ Історія</button>
     <button class="tab-btn" id="tabCharBtn" onclick="switchTab('character')">🧙 Персонаж</button>
+    <button class="tab-btn" id="tabLogBtn" onclick="switchTab('log')">📜 Лог</button>
   </div>
 
-  <div id="storyView" class="view active">
+  <div id="onboardingView" class="view active"></div>
+
+  <div id="storyView" class="view">
     <div id="status"></div>
     <div class="dice-anim" id="diceAnim">
       <div class="die-face" id="dieFace">
@@ -291,6 +369,10 @@
     <div id="charInventory"></div>
   </div>
 
+  <div id="logView" class="view">
+    <div id="logList"></div>
+  </div>
+
 <script>
 const tg = window.Telegram.WebApp;
 tg.ready();
@@ -298,6 +380,7 @@ tg.expand();
 const initData = tg.initData;
 
 let lastCharacter = null;
+let lastLog = [];
 let diceInterval = null;
 
 // --- Real 3D d20 (icosahedron) via three.js ---
@@ -404,9 +487,12 @@ function stopDiceAnimation(finalValue) {
 function switchTab(name) {
   document.getElementById("storyView").classList.toggle("active", name === "story");
   document.getElementById("characterView").classList.toggle("active", name === "character");
+  document.getElementById("logView").classList.toggle("active", name === "log");
   document.getElementById("tabStoryBtn").classList.toggle("active", name === "story");
   document.getElementById("tabCharBtn").classList.toggle("active", name === "character");
+  document.getElementById("tabLogBtn").classList.toggle("active", name === "log");
   if (name === "character") renderCharacterView();
+  if (name === "log") renderLogView();
 }
 
 async function api(path, body) {
@@ -416,6 +502,16 @@ async function api(path, body) {
     body: JSON.stringify({ initData, ...body }),
   });
   return res.json();
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function showTabs(show) {
+  document.getElementById("tabs").style.display = show ? "flex" : "none";
 }
 
 function renderStatus(character) {
@@ -507,13 +603,31 @@ function renderCharacterView() {
   }
 }
 
+function renderLogView() {
+  const el = document.getElementById("logList");
+  if (!lastLog.length) {
+    el.innerHTML = `<div class="empty-note">Історія ще порожня</div>`;
+    return;
+  }
+  el.innerHTML = lastLog.map(entry => {
+    const isPlayer = entry.startsWith("[Player]:") || entry.startsWith("[Гравець]:");
+    const text = entry.replace(/^\[(Player|Гравець|DM)\]:\s*/, "");
+    return `<div class="log-entry ${isPlayer ? "player" : "dm"}">${escapeHtml(text)}</div>`;
+  }).join("");
+  el.scrollTop = el.scrollHeight;
+}
+
 function applyState(data) {
   lastCharacter = data.character || null;
+  if (data.log) lastLog = data.log;
   renderStatus(data.character);
   renderStory(data.text);
   renderOptions(data.options);
   if (document.getElementById("characterView").classList.contains("active")) {
     renderCharacterView();
+  }
+  if (document.getElementById("logView").classList.contains("active")) {
+    renderLogView();
   }
 }
 
@@ -525,14 +639,20 @@ function setLoading() {
 
 async function loadState() {
   const data = await api("/api/state", {});
-  if (data.error) {
-    renderStory(
-      data.error === "no_active_game"
-        ? "Немає активної пригоди. Почни /new в чаті з ботом."
-        : "Не вдалося авторизуватись. Відкрий цю сторінку через кнопку в боті."
-    );
+  if (data.error === "no_active_game") {
+    startOnboarding();
     return;
   }
+  if (data.error) {
+    showTabs(false);
+    document.getElementById("onboardingView").classList.add("active");
+    document.getElementById("onboardingView").innerHTML =
+      `<div class="wiz-loading">Не вдалося авторизуватись. Відкрий цю сторінку через кнопку в боті.</div>`;
+    return;
+  }
+  showTabs(true);
+  document.getElementById("onboardingView").classList.remove("active");
+  document.getElementById("storyView").classList.add("active");
   applyState(data);
 }
 
@@ -572,6 +692,215 @@ async function sendFreeText() {
   setLoading();
   const data = await api("/api/action", { type: "text", text });
   handleActionResult(data);
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding wizard: language -> category -> world -> character -> start
+// ---------------------------------------------------------------------------
+
+let wizard = {
+  language: null,
+  uiStrings: null,
+  category: null,
+  worldDescription: null,
+  characterDescription: null,
+  gender: null,
+  age: null,
+  currentPreview: null,
+};
+
+function onboardingHTML(html) {
+  document.getElementById("onboardingView").innerHTML = html;
+}
+
+function showWizardError(data) {
+  const t = wizard.uiStrings || {};
+  const template = t.gemini_error || "Error: {error}";
+  const msg = template.replace("{error}", data.detail || data.error || "unknown");
+  onboardingHTML(
+    `<div class="wiz-loading">${escapeHtml(msg)}</div>` +
+    `<button class="btn" onclick="startOnboarding()">🔄 Retry</button>`
+  );
+}
+
+function startOnboarding() {
+  showTabs(false);
+  document.getElementById("storyView").classList.remove("active");
+  document.getElementById("characterView").classList.remove("active");
+  document.getElementById("logView").classList.remove("active");
+  document.getElementById("onboardingView").classList.add("active");
+  renderLanguageStep();
+}
+
+function renderLanguageStep() {
+  onboardingHTML(`
+    <div class="wiz-title">🌐 Choose language / Обери мову / Выбери язык / Wybierz język</div>
+    <div id="langButtons"></div>
+  `);
+  fetch("/api/languages").then(r => r.json()).then(languages => {
+    document.getElementById("langButtons").innerHTML = languages
+      .map(l => `<button class="btn" onclick="selectLanguage('${l.key}')">${l.label}</button>`)
+      .join("");
+  });
+}
+
+async function selectLanguage(key) {
+  wizard.language = key;
+  onboardingHTML(`<div class="wiz-loading">...</div>`);
+  const [uiStrings, categories] = await Promise.all([
+    fetch(`/api/ui?lang=${key}`).then(r => r.json()),
+    fetch(`/api/categories?lang=${key}`).then(r => r.json()),
+  ]);
+  wizard.uiStrings = uiStrings;
+  renderCategoryStep(categories);
+}
+
+function renderCategoryStep(categories) {
+  const t = wizard.uiStrings;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.choose_category)}</div>
+    <div id="catButtons"></div>
+  `);
+  document.getElementById("catButtons").innerHTML = categories
+    .map(c => `<button class="btn" onclick="selectCategory('${c.key}')">${escapeHtml(c.label)}</button>`)
+    .join("");
+}
+
+function selectCategory(key) {
+  wizard.category = key;
+  renderWorldStep();
+}
+
+function renderWorldStep() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.describe_world)}</div>
+    <textarea class="wiz-textarea" id="worldInput"></textarea>
+    <button class="btn" onclick="submitWorldText()">${escapeHtml(t.continue_button)}</button>
+    <button class="btn secondary" onclick="requestWorldPreview()">${escapeHtml(t.world_random_button)}</button>
+  `);
+}
+
+function submitWorldText() {
+  const text = document.getElementById("worldInput").value.trim();
+  wizard.worldDescription = text || null;
+  renderCharacterMethodStep();
+}
+
+async function requestWorldPreview() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`<div class="wiz-loading">${escapeHtml(t.generating_preview)}</div>`);
+  const data = await api("/api/preview/world", { language: wizard.language, category: wizard.category });
+  if (data.error) { showWizardError(data); return; }
+  wizard.currentPreview = data.preview;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.describe_world)}</div>
+    <div class="preview-card">${escapeHtml(data.preview)}</div>
+    <button class="btn secondary" onclick="requestWorldPreview()">${escapeHtml(t.preview_regen_button)}</button>
+    <button class="btn" onclick="acceptWorldPreview()">${escapeHtml(t.preview_accept_button)}</button>
+  `);
+}
+
+function acceptWorldPreview() {
+  wizard.worldDescription = wizard.currentPreview;
+  renderCharacterMethodStep();
+}
+
+function renderCharacterMethodStep() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.character_method_prompt)}</div>
+    <button class="btn" onclick="renderCharacterManualStep()">${escapeHtml(t.character_manual_button)}</button>
+    <button class="btn secondary" onclick="renderGenderStep()">${escapeHtml(t.character_random_button)}</button>
+  `);
+}
+
+function renderCharacterManualStep() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.describe_character_prompt)}</div>
+    <textarea class="wiz-textarea" id="charInput"></textarea>
+    <button class="btn" onclick="submitCharacterText()">${escapeHtml(t.continue_button)}</button>
+  `);
+}
+
+function submitCharacterText() {
+  const text = document.getElementById("charInput").value.trim();
+  wizard.characterDescription = text || null;
+  startAdventure();
+}
+
+function renderGenderStep() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.choose_gender)}</div>
+    <button class="btn" onclick="selectGender('male')">${escapeHtml(t.gender_male)}</button>
+    <button class="btn" onclick="selectGender('female')">${escapeHtml(t.gender_female)}</button>
+    <button class="btn secondary" onclick="selectGender('any')">${escapeHtml(t.gender_any)}</button>
+  `);
+}
+
+function selectGender(g) {
+  wizard.gender = g;
+  renderAgeStep();
+}
+
+function renderAgeStep() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.enter_age_prompt)}</div>
+    <input class="wiz-input" id="ageInput" placeholder="27">
+    <button class="btn" onclick="submitAge()">${escapeHtml(t.continue_button)}</button>
+  `);
+}
+
+function submitAge() {
+  const value = document.getElementById("ageInput").value.trim();
+  wizard.age = value || "any";
+  requestCharacterPreview();
+}
+
+async function requestCharacterPreview() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`<div class="wiz-loading">${escapeHtml(t.generating_preview)}</div>`);
+  const data = await api("/api/preview/character", {
+    language: wizard.language,
+    category: wizard.category,
+    gender: wizard.gender,
+    age: wizard.age,
+    world_description: wizard.worldDescription,
+  });
+  if (data.error) { showWizardError(data); return; }
+  wizard.currentPreview = data.preview;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.character_method_prompt)}</div>
+    <div class="preview-card">${escapeHtml(data.preview)}</div>
+    <button class="btn secondary" onclick="requestCharacterPreview()">${escapeHtml(t.preview_regen_button)}</button>
+    <button class="btn" onclick="acceptCharacterPreview()">${escapeHtml(t.preview_accept_button)}</button>
+  `);
+}
+
+function acceptCharacterPreview() {
+  wizard.characterDescription = wizard.currentPreview;
+  startAdventure();
+}
+
+async function startAdventure() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`<div class="wiz-loading">${escapeHtml(t.creating)}</div>`);
+  const data = await api("/api/create", {
+    language: wizard.language,
+    category: wizard.category,
+    world_description: wizard.worldDescription,
+    character_description: wizard.characterDescription,
+    gender: wizard.gender,
+    age: wizard.age,
+  });
+  if (data.error) { showWizardError(data); return; }
+  document.getElementById("onboardingView").classList.remove("active");
+  document.getElementById("storyView").classList.add("active");
+  showTabs(true);
+  applyState(data);
 }
 
 initDiceScene();

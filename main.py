@@ -149,7 +149,10 @@ async def maybe_summarize(game: GameState):
 async def cmd_start(message: Message):
     game = load_state(message.from_user.id)
     lang_key = game.language if game else lang.DEFAULT_LANGUAGE
-    await message.answer(ui.t(lang_key, "start"))
+    if PUBLIC_URL:
+        await send_miniapp_button(message, lang_key)
+    else:
+        await message.answer(ui.t(lang_key, "start"))
 
 
 @dp.message(Command("reset"))
@@ -172,16 +175,19 @@ async def cmd_roll(message: Message):
 async def cmd_play(message: Message):
     game = load_state(message.from_user.id)
     lang_key = game.language if game else lang.DEFAULT_LANGUAGE
-    if game is None:
-        await message.answer(ui.t(lang_key, "no_active_game"))
-        return
     if not PUBLIC_URL:
         await message.answer(
             "PUBLIC_URL не налаштований — додай його як змінну середовища "
             "(посилання на цей сервіс, наприклад https://your-app.up.railway.app)."
         )
         return
+    await send_miniapp_button(message, lang_key)
 
+
+async def send_miniapp_button(message: Message, lang_key: str):
+    """Send the button that opens the Mini App. Works whether or not the
+    person has an active game — the Mini App itself shows the creation
+    wizard when there's no game yet, or the story when there is."""
     url = f"{PUBLIC_URL.rstrip('/')}/miniapp"
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=ui.t(lang_key, "open_miniapp_button"), web_app=WebAppInfo(url=url))
@@ -391,34 +397,23 @@ async def accept_character_preview(callback: CallbackQuery, state: FSMContext):
 async def finalize_creation(message: Message, user_id: int, state: FSMContext):
     data = await state.get_data()
     lang_key = data.get("language_key", lang.DEFAULT_LANGUAGE)
-    language_name = lang.prompt_name_for(lang_key)
     category_key = data.get("category_key", random.choice(wc.all_keys()))
     world_description = data.get("world_description")
-
-    if "character_description" in data:
-        character_brief = (
-            f"The player described the character like this: {data['character_description']}. "
-            "Use this description, filling in small extra details if needed (name, class, traits)."
-        )
-        character_record = {"description": data["character_description"]}
-    else:
-        gender = data.get("gender", "any")
-        age = data.get("age", "any")
-        character_brief = (
-            f"Invent the character yourself: gender — {gender}, age — {age}. "
-            "Make up a name, class/profession, and a short backstory that fits the world."
-        )
-        character_record = {"gender": gender, "age": age, "generated": True}
+    character_description = data.get("character_description")
+    gender = data.get("gender")
+    age = data.get("age")
 
     await message.answer(ui.t(lang_key, "creating"))
 
     try:
-        opening = gemini_client.generate_new_adventure_opening(
-            category_label=wc.label_for(category_key, lang_key),
-            category_hint=wc.hint_for(category_key),
+        result = core.create_adventure(
+            user_id=user_id,
+            language_key=lang_key,
+            category_key=category_key,
             world_description=world_description,
-            character_brief=character_brief,
-            language_name=language_name,
+            character_description=character_description,
+            gender=gender,
+            age=age,
         )
     except Exception as e:
         logger.exception("Gemini error")
@@ -426,32 +421,11 @@ async def finalize_creation(message: Message, user_id: int, state: FSMContext):
         await state.clear()
         return
 
-    text_after_state, parsed_state = gemini_client.parse_state_tag(opening)
-    clean_text, attrs = gemini_client.parse_attrs_tag(text_after_state)
-    hp = parsed_state.get("hp", gemini_client.DEFAULT_HP)
-    max_hp = parsed_state.get("max_hp", gemini_client.DEFAULT_HP)
-
-    character_record["category"] = category_key
-    character_record["world_description"] = world_description
-    character_record["hp"] = hp
-    character_record["max_hp"] = max_hp
-    if "money" in parsed_state:
-        character_record["money"] = parsed_state["money"]
-    if "inventory" in parsed_state:
-        character_record["inventory"] = parsed_state["inventory"]
-    if attrs:
-        character_record["attributes"] = attrs
-
-    display_text, options = format_options(clean_text, lang_key)
-
-    game = GameState(user_id=user_id, character=character_record, language=lang_key)
-    game.add_turn(f"[DM]: {clean_text}")
-    game.pending_options = options
-    save_state(game)
     await state.clear()
 
-    kb = action_keyboard(len(options)) if options else None
-    await message.answer(f"{display_text}\n\n{status_line(lang_key, character_record)}", reply_markup=kb)
+    kb = action_keyboard(len(result["options"])) if result["options"] else None
+    reply_text = f"{result['text']}\n\n{status_line(lang_key, result['character'])}"
+    await message.answer(reply_text, reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------

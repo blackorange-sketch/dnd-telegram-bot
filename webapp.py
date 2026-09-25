@@ -11,6 +11,9 @@ from aiohttp import web
 
 import core
 import gemini_client
+import languages as lang
+import ui_strings as ui
+import world_categories as wc
 from game_state import load_state
 from telegram_auth import verify_init_data
 
@@ -63,7 +66,119 @@ async def api_state(request: web.Request) -> web.Response:
         "options": game.pending_options,
         "character": game.character,
         "language": game.language,
+        "log": game.full_log,
     })
+
+
+# ---------------------------------------------------------------------------
+# Static reference data for the onboarding wizard (no auth needed — nothing
+# user-specific here, just the same labels/strings the bot itself uses).
+# ---------------------------------------------------------------------------
+
+@routes.get("/api/languages")
+async def api_languages(request: web.Request) -> web.Response:
+    return web.json_response([
+        {"key": key, "label": lang.label_for(key)} for key in lang.all_keys()
+    ])
+
+
+@routes.get("/api/categories")
+async def api_categories(request: web.Request) -> web.Response:
+    lang_key = request.query.get("lang", lang.DEFAULT_LANGUAGE)
+    categories = [
+        {"key": key, "label": wc.label_for(key, lang_key)} for key in wc.all_keys()
+    ]
+    categories.append({"key": wc.RANDOM_KEY, "label": wc.random_label(lang_key)})
+    return web.json_response(categories)
+
+
+@routes.get("/api/ui")
+async def api_ui(request: web.Request) -> web.Response:
+    lang_key = request.query.get("lang", lang.DEFAULT_LANGUAGE)
+    return web.json_response(ui.STRINGS.get(lang_key, ui.STRINGS[ui.DEFAULT_UI_LANG]))
+
+
+# ---------------------------------------------------------------------------
+# Onboarding: preview + regenerate world/character concepts, then create
+# ---------------------------------------------------------------------------
+
+@routes.post("/api/preview/world")
+async def api_preview_world(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_request"}, status=400)
+    if _authed_user_id(body) is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
+    category_key = body.get("category", wc.all_keys()[0])
+    try:
+        preview = gemini_client.generate_world_preview(
+            category_label=wc.label_for(category_key, lang_key),
+            category_hint=wc.hint_for(category_key),
+            language_name=lang.prompt_name_for(lang_key),
+        )
+    except Exception as e:
+        logger.exception("Gemini error generating world preview")
+        return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
+    return web.json_response({"preview": preview})
+
+
+@routes.post("/api/preview/character")
+async def api_preview_character(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_request"}, status=400)
+    if _authed_user_id(body) is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
+    category_key = body.get("category", wc.all_keys()[0])
+    try:
+        preview = gemini_client.generate_character_preview(
+            gender=body.get("gender", "any"),
+            age=body.get("age", "any"),
+            world_description=body.get("world_description"),
+            category_hint=wc.hint_for(category_key),
+            language_name=lang.prompt_name_for(lang_key),
+        )
+    except Exception as e:
+        logger.exception("Gemini error generating character preview")
+        return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
+    return web.json_response({"preview": preview})
+
+
+@routes.post("/api/create")
+async def api_create(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_request"}, status=400)
+
+    user_id = _authed_user_id(body)
+    if user_id is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
+    category_key = body.get("category", wc.all_keys()[0])
+
+    try:
+        result = core.create_adventure(
+            user_id=user_id,
+            language_key=lang_key,
+            category_key=category_key,
+            world_description=body.get("world_description"),
+            character_description=body.get("character_description"),
+            gender=body.get("gender"),
+            age=body.get("age"),
+        )
+    except Exception as e:
+        logger.exception("Gemini error creating adventure")
+        return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
+
+    return web.json_response(result)
 
 
 @routes.post("/api/action")

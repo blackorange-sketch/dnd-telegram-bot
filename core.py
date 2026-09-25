@@ -9,6 +9,7 @@ import dice
 import gemini_client
 import languages as lang
 import ui_strings as ui
+import world_categories as wc
 from game_state import SUMMARY_EVERY_N_TURNS, GameState, save_state
 
 logger = logging.getLogger(__name__)
@@ -120,4 +121,75 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
         "options": options,
         "character": game.character,
         "defeated": hp is not None and hp <= 0,
+        "log": game.full_log,
+    }
+
+
+def create_adventure(
+    user_id: int,
+    language_key: str,
+    category_key: str,
+    world_description: str | None,
+    character_description: str | None,
+    gender: str | None,
+    age: str | None,
+) -> dict:
+    """Generate the opening scene for a brand-new adventure, save a fresh
+    GameState for `user_id`, and return the same shape perform_turn() does
+    (so both the bot and the Mini App can render either result the same
+    way). Raises on a Gemini failure — nothing is saved in that case."""
+    language_name = lang.prompt_name_for(language_key)
+
+    if character_description:
+        character_brief = (
+            f"The player described the character like this: {character_description}. "
+            "Use this description, filling in small extra details if needed (name, class, traits)."
+        )
+        character_record = {"description": character_description}
+    else:
+        gender = gender or "any"
+        age = age or "any"
+        character_brief = (
+            f"Invent the character yourself: gender — {gender}, age — {age}. "
+            "Make up a name, class/profession, and a short backstory that fits the world."
+        )
+        character_record = {"gender": gender, "age": age, "generated": True}
+
+    opening = gemini_client.generate_new_adventure_opening(
+        category_label=wc.label_for(category_key, language_key),
+        category_hint=wc.hint_for(category_key),
+        world_description=world_description,
+        character_brief=character_brief,
+        language_name=language_name,
+    )
+
+    text_after_state, parsed_state = gemini_client.parse_state_tag(opening)
+    clean_text, attrs = gemini_client.parse_attrs_tag(text_after_state)
+    hp = parsed_state.get("hp", gemini_client.DEFAULT_HP)
+    max_hp = parsed_state.get("max_hp", gemini_client.DEFAULT_HP)
+
+    character_record["category"] = category_key
+    character_record["world_description"] = world_description
+    character_record["hp"] = hp
+    character_record["max_hp"] = max_hp
+    if "money" in parsed_state:
+        character_record["money"] = parsed_state["money"]
+    if "inventory" in parsed_state:
+        character_record["inventory"] = parsed_state["inventory"]
+    if attrs:
+        character_record["attributes"] = attrs
+
+    display_text, options = format_options(clean_text, language_key)
+
+    game = GameState(user_id=user_id, character=character_record, language=language_key)
+    game.add_turn(f"[DM]: {clean_text}")
+    game.pending_options = options
+    save_state(game)
+
+    return {
+        "text": display_text,
+        "options": options,
+        "character": game.character,
+        "defeated": False,
+        "log": game.full_log,
     }
