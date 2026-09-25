@@ -13,7 +13,9 @@ from game_state import SUMMARY_EVERY_N_TURNS, GameState, save_state
 
 logger = logging.getLogger(__name__)
 
-OPTION_LINE_RE = re.compile(r"^\s*\d\)\s*.+$", re.MULTILINE)
+# Accept "1)" (the format we ask for) as well as "1." (a drift Gemini
+# sometimes produces anyway) so a formatting slip doesn't break parsing.
+OPTION_LINE_RE = re.compile(r"^\s*\d[.)]\s*.+$", re.MULTILINE)
 
 
 def format_options(story_text: str, lang_key: str) -> tuple[str, list[dict]]:
@@ -27,7 +29,7 @@ def format_options(story_text: str, lang_key: str) -> tuple[str, list[dict]]:
         line = match.group(0)
         requires_roll = gemini_client.ROLL_MARKER in line
         clean_line = line.replace(gemini_client.ROLL_MARKER, "").rstrip()
-        text_only = re.sub(r"^\s*\d\)\s*", "", clean_line)
+        text_only = re.sub(r"^\s*\d[.)]\s*", "", clean_line)
         options.append({"text": text_only, "requires_roll": requires_roll})
         return ""
 
