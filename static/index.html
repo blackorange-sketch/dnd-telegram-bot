@@ -231,6 +231,10 @@
     transition: background-color 0.4s ease, color 0.4s ease, box-shadow 0.4s ease;
   }
   .btn:active { opacity: 0.8; }
+  .btn:disabled, #sendBtn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
   #textRow { display: flex; gap: 8px; margin-top: 14px; }
   #freeText {
     flex: 1;
@@ -791,6 +795,11 @@ function applyState(data) {
   }
 }
 
+function setBusy(busy) {
+  document.getElementById("diceBtn").disabled = busy;
+  document.getElementById("sendBtn").disabled = busy;
+}
+
 function setLoading() {
   renderRoll(null);
   renderChanges(null);
@@ -831,19 +840,29 @@ function handleActionResult(data) {
 }
 
 async function sendChoice(index, requiresRoll) {
-  if (requiresRoll) startDiceAnimation(20);
-  setLoading();
-  const data = await api("/api/action", { type: "choice", index });
-  if (requiresRoll) await stopDiceAnimation(data.roll ? data.roll.value : null);
-  handleActionResult(data);
+  setBusy(true);
+  try {
+    if (requiresRoll) startDiceAnimation(20);
+    setLoading();
+    const data = await api("/api/action", { type: "choice", index });
+    if (requiresRoll) await stopDiceAnimation(data.roll ? data.roll.value : null);
+    handleActionResult(data);
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function sendManualRoll() {
-  startDiceAnimation(20);
-  setLoading();
-  const data = await api("/api/action", { type: "roll", sides: 20 });
-  await stopDiceAnimation(data.roll ? data.roll.value : null);
-  handleActionResult(data);
+  setBusy(true);
+  try {
+    startDiceAnimation(20);
+    setLoading();
+    const data = await api("/api/action", { type: "roll", sides: 20 });
+    await stopDiceAnimation(data.roll ? data.roll.value : null);
+    handleActionResult(data);
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function sendFreeText() {
@@ -851,9 +870,14 @@ async function sendFreeText() {
   const text = input.value.trim();
   if (!text) return;
   input.value = "";
-  setLoading();
-  const data = await api("/api/action", { type: "text", text });
-  handleActionResult(data);
+  setBusy(true);
+  try {
+    setLoading();
+    const data = await api("/api/action", { type: "text", text });
+    handleActionResult(data);
+  } finally {
+    setBusy(false);
+  }
 }
 
 // ---------------------------------------------------------------------------

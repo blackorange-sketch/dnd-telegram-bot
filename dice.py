@@ -48,17 +48,20 @@ def hp_penalty(hp: int, max_hp: int) -> int:
 
 
 def classify(natural: int, total: int) -> str:
-    """Classify a d20 check into one of five outcome tiers. A natural 1 or
-    20 always overrides the total (classic critical fail/success)."""
-    if natural == 1:
+    """Classify a d20 check into one of five outcome tiers, based on the
+    modified TOTAL (not the bare natural roll) — a natural 19 with a +1
+    modifier is a genuine 20 and counts as a critical success; a natural 1
+    softened by a +1 modifier is no longer a catastrophic critical failure,
+    just a regular one."""
+    if total <= 1:
         return "critical_failure"
-    if natural == 20:
-        return "critical_success"
     if total <= 8:
         return "failure"
     if total <= 13:
         return "partial_success"
-    return "success"
+    if total <= 19:
+        return "success"
+    return "critical_success"
 
 
 def attribute_modifier(value) -> int:
