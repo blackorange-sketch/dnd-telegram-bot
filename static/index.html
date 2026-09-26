@@ -6,6 +6,9 @@
 <title>DnD Adventure</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Orbitron:wght@600;800&family=Creepster&family=Audiowide&family=Special+Elite&family=Metal+Mania&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light dark;
@@ -17,13 +20,67 @@
     --card: rgba(255, 255, 255, 0.06);
     --hp: #e5484d;
     --attr: #2ea6ff;
+    --font-heading: inherit;
+    --bg-image: none;
+  }
+
+  /* --- Per-category themes, applied via html[data-theme="..."] --- */
+  html[data-theme="fantasy"] {
+    --bg: #1c140c; --card: rgba(196, 154, 84, 0.14); --btn: #6b3f1d;
+    --btn-text: #f4e4c1; --hint: #b89968; --hp: #c0392b; --attr: #d4af5a;
+    --text: #f0e6d2; --font-heading: 'Cinzel', serif;
+    --btn-glow: inset 0 0 0 1px rgba(212,175,90,0.4);
+    --bg-image: radial-gradient(circle at 15% 10%, rgba(212,175,90,0.10), transparent 42%),
+                radial-gradient(circle at 85% 90%, rgba(107,63,29,0.16), transparent 48%);
+  }
+  html[data-theme="scifi"] {
+    --bg: #060f18; --card: rgba(46, 166, 255, 0.10); --btn: #0e5a78;
+    --btn-text: #d9faff; --hint: #6fa8c9; --hp: #ff5470; --attr: #2ea6ff;
+    --text: #dff6ff; --font-heading: 'Orbitron', sans-serif;
+    --btn-glow: 0 0 10px rgba(46,166,255,0.45), inset 0 0 0 1px rgba(46,166,255,0.5);
+    --bg-image: repeating-linear-gradient(90deg, rgba(46,166,255,0.05) 0 1px, transparent 1px 48px),
+                repeating-linear-gradient(0deg, rgba(46,166,255,0.05) 0 1px, transparent 1px 48px);
+  }
+  html[data-theme="postapo"] {
+    --bg: #161512; --card: rgba(214, 158, 46, 0.10); --btn: #7a4a12;
+    --btn-text: #fff3d6; --hint: #a08c6e; --hp: #d94f2b; --attr: #d9a02b;
+    --text: #ece3d2; --font-heading: 'Metal Mania', cursive;
+    --btn-glow: inset 0 0 0 1px rgba(217,160,43,0.35);
+    --bg-image: radial-gradient(circle at 25% 20%, rgba(217,79,43,0.10), transparent 40%),
+                radial-gradient(circle at 75% 75%, rgba(217,160,43,0.08), transparent 45%);
+  }
+  html[data-theme="horror"] {
+    --bg: #0d0505; --card: rgba(139, 0, 0, 0.16); --btn: #4a0e0e;
+    --btn-text: #e8d9c8; --hint: #8a6a6a; --hp: #d94f4f; --attr: #b23a3a;
+    --text: #e8d9c8; --font-heading: 'Creepster', cursive;
+    --btn-glow: inset 0 0 0 1px rgba(178,58,58,0.4);
+    --bg-image: radial-gradient(circle at 50% 0%, rgba(139,0,0,0.18), transparent 55%);
+  }
+  html[data-theme="cyberpunk"] {
+    --bg: #08040f; --card: rgba(217, 70, 239, 0.10); --btn: #7a1fa2;
+    --btn-text: #fdeeff; --hint: #a875c9; --hp: #ff2f92; --attr: #38e8ff;
+    --text: #f2e8ff; --font-heading: 'Audiowide', sans-serif;
+    --btn-glow: 0 0 14px rgba(255,47,224,0.5), inset 0 0 0 1px rgba(56,232,255,0.6);
+    --bg-image: linear-gradient(180deg, rgba(217,70,239,0.08), transparent 30%),
+                repeating-linear-gradient(90deg, rgba(56,232,255,0.04) 0 2px, transparent 2px 40px);
+  }
+  html[data-theme="steampunk"] {
+    --bg: #17110a; --card: rgba(184, 134, 66, 0.14); --btn: #6e4a1f;
+    --btn-text: #f5e8cf; --hint: #b08a55; --hp: #c0392b; --attr: #c9973e;
+    --text: #f0e2c8; --font-heading: 'Special Elite', cursive;
+    --btn-glow: inset 0 0 0 1px rgba(201,151,62,0.45);
+    --bg-image: radial-gradient(circle at 20% 85%, rgba(201,151,62,0.10), transparent 42%),
+                radial-gradient(circle at 80% 15%, rgba(110,74,31,0.14), transparent 46%);
   }
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
-    background: var(--bg);
+    background-color: var(--bg);
+    background-image: var(--bg-image);
+    background-attachment: fixed;
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    transition: background-color 0.4s ease, color 0.4s ease;
   }
   body {
     padding: 16px;
@@ -164,12 +221,14 @@
     text-align: left;
     padding: 12px 14px;
     margin: 6px 0;
-    border: none;
+    border: 1px solid transparent;
     border-radius: 12px;
     background: var(--btn);
     color: var(--btn-text);
     font-size: 15px;
     cursor: pointer;
+    box-shadow: var(--btn-glow, none);
+    transition: background-color 0.4s ease, color 0.4s ease, box-shadow 0.4s ease;
   }
   .btn:active { opacity: 0.8; }
   #textRow { display: flex; gap: 8px; margin-top: 14px; }
@@ -203,6 +262,7 @@
     letter-spacing: 0.04em;
     color: var(--hint);
     margin: 18px 0 8px;
+    font-family: var(--font-heading);
   }
   .section-title:first-child { margin-top: 0; }
   .hp-bar-track {
@@ -271,6 +331,7 @@
     font-size: 18px;
     font-weight: 700;
     margin-bottom: 14px;
+    font-family: var(--font-heading);
   }
   .wiz-subtitle {
     font-size: 14px;
@@ -398,9 +459,33 @@ const initData = tg.initData;
 let lastCharacter = null;
 let lastLog = [];
 let diceInterval = null;
+let currentThemeIcon = "";
+
+// Per-category visual theme: CSS handles colors/fonts/background via
+// html[data-theme], this map covers what only JS can touch (the 3D dice
+// material/edge/light colors, and a small accent icon on action buttons).
+const THEMES = {
+  fantasy:   { dice: 0x5a4326, edge: 0xf0c674, light: 0xffd9a0, icon: "⚔️" },
+  scifi:     { dice: 0x123244, edge: 0x29d8ff, light: 0x88ccff, icon: "🛰️" },
+  postapo:   { dice: 0x4a3c28, edge: 0xd9a02b, light: 0xffcf7a, icon: "☢️" },
+  horror:    { dice: 0x2a0a0a, edge: 0x8a2222, light: 0xff6666, icon: "💀" },
+  cyberpunk: { dice: 0x2a0a3a, edge: 0xff2fe0, light: 0x38e8ff, icon: "🤖" },
+  steampunk: { dice: 0x4a3216, edge: 0xc9973e, light: 0xffcf7a, icon: "⚙️" },
+};
+
+function applyTheme(category) {
+  const theme = THEMES[category];
+  document.documentElement.dataset.theme = theme ? category : "";
+  currentThemeIcon = theme ? theme.icon : "";
+  if (theme && dieMesh) {
+    dieMesh.material.color.setHex(theme.dice);
+    if (diceEdgeMaterial) diceEdgeMaterial.color.setHex(theme.edge);
+    if (diceKeyLight) diceKeyLight.color.setHex(theme.light);
+  }
+}
 
 // --- Real 3D d20 (icosahedron) via three.js ---
-let scene, camera, renderer, dieMesh;
+let scene, camera, renderer, dieMesh, diceEdgeMaterial, diceKeyLight;
 let rotSpeed = { x: 0.002, y: 0.004, z: 0.001 };
 let decelInterval = null;
 
@@ -427,13 +512,14 @@ function initDiceScene() {
   scene.add(dieMesh);
 
   const edges = new THREE.EdgesGeometry(geometry);
-  const edgeLines = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x14151a }));
+  diceEdgeMaterial = new THREE.LineBasicMaterial({ color: 0x14151a });
+  const edgeLines = new THREE.LineSegments(edges, diceEdgeMaterial);
   dieMesh.add(edgeLines);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const key = new THREE.DirectionalLight(0xffffff, 0.9);
-  key.position.set(2, 3, 4);
-  scene.add(key);
+  diceKeyLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  diceKeyLight.position.set(2, 3, 4);
+  scene.add(diceKeyLight);
   const fill = new THREE.DirectionalLight(0x88aaff, 0.35);
   fill.position.set(-3, -1, -2);
   scene.add(fill);
@@ -578,7 +664,8 @@ function renderOptions(options) {
   (options || []).forEach((opt, i) => {
     const btn = document.createElement("button");
     btn.className = "btn";
-    let label = (i + 1) + ") " + opt.text;
+    const prefix = currentThemeIcon ? currentThemeIcon + " " : "";
+    let label = prefix + (i + 1) + ") " + opt.text;
     if (opt.requires_roll) {
       const modifier = computeModifier(lastCharacter, opt.attribute);
       label += modifier ? ` 🎲${modifier > 0 ? "+" : ""}${modifier}` : " 🎲";
@@ -692,6 +779,7 @@ function renderLogView() {
 function applyState(data) {
   lastCharacter = data.character || null;
   if (data.log) lastLog = data.log;
+  applyTheme(lastCharacter && lastCharacter.category);
   renderStatus(data.character);
   renderStory(data.text);
   renderOptions(data.options);
@@ -798,6 +886,7 @@ function showWizardError(data) {
 }
 
 function startOnboarding() {
+  applyTheme(null);
   showTabs(false);
   document.getElementById("storyView").classList.remove("active");
   document.getElementById("characterView").classList.remove("active");
