@@ -111,12 +111,13 @@ def gender_keyboard(lang_key: str) -> InlineKeyboardMarkup:
     ])
 
 
-def action_keyboard(options: list[dict]) -> InlineKeyboardMarkup:
+def action_keyboard(options: list[dict], character: dict) -> InlineKeyboardMarkup:
     rows = []
     for i, opt in enumerate(options, start=1):
         label = f"{i}) {opt['text']}"
         if opt.get("requires_roll"):
-            label += " 🎲"
+            modifier = core.compute_modifier(character, opt.get("attribute"))
+            label += f" 🎲{modifier:+d}" if modifier else " 🎲"
         rows.append([InlineKeyboardButton(text=label[:64], callback_data=f"choice:{i}")])
     rows.append([InlineKeyboardButton(text="🎲 d20", callback_data="roll:20")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -428,7 +429,7 @@ async def finalize_creation(message: Message, user_id: int, state: FSMContext):
 
     await state.clear()
 
-    kb = action_keyboard(result["options"]) if result["options"] else None
+    kb = action_keyboard(result["options"], result["character"]) if result["options"] else None
     reply_text = f"{result['text']}\n\n{status_line(lang_key, result['character'])}"
     await message.answer(reply_text, reply_markup=kb)
 
@@ -459,8 +460,11 @@ async def advance_story(message_or_callback, user_id: int, player_input: str):
             await message_or_callback.answer(ui.t(lang_key, "gemini_error", error=e))
             return
 
-        kb = action_keyboard(result["options"]) if result["options"] else None
-        reply_text = f"{result['text']}\n\n{status_line(lang_key, result['character'])}"
+        kb = action_keyboard(result["options"], result["character"]) if result["options"] else None
+        reply_text = result["text"]
+        if result.get("changes_line"):
+            reply_text += f"\n\n{result['changes_line']}"
+        reply_text += f"\n\n{status_line(lang_key, result['character'])}"
         if result["defeated"]:
             reply_text += f"\n\n{ui.t(lang_key, 'defeated')}"
 
@@ -479,15 +483,17 @@ async def handle_free_text(message: Message, state: FSMContext):
     await advance_story(message, message.from_user.id, message.text)
 
 
-async def do_roll_and_describe(callback: CallbackQuery, lang_key: str, game: GameState, sides: int = 20) -> str:
+async def do_roll_and_describe(
+    callback: CallbackQuery, lang_key: str, game: GameState, sides: int = 20, attribute: str | None = None
+) -> str:
     """Roll the die, post a standalone result message with the outcome
     tier, and return the action text to feed into the story generation."""
-    roll_info = core.compute_roll(game, sides)
+    roll_info = core.compute_roll(game, sides, attribute=attribute)
     tier = roll_info["tier"]
-    penalty_note = ui.t(lang_key, "dice_penalty_note", penalty=roll_info["penalty"]) if roll_info["penalty"] else ""
+    modifier_note = ui.t(lang_key, "dice_penalty_note", modifier=roll_info["modifier"]) if roll_info["modifier"] else ""
 
     roll_message = (
-        f"{ui.t(lang_key, 'dice_roll_label', sides=sides)}: {roll_info['value']}{penalty_note}\n"
+        f"{ui.t(lang_key, 'dice_roll_label', sides=sides)}: {roll_info['value']}{modifier_note}\n"
         f"{ui.t(lang_key, 'dice_total', total=roll_info['total'])}\n"
         f"{TIER_EMOJI[tier]} {ui.t(lang_key, f'tier_{tier}')}"
     )
@@ -516,7 +522,7 @@ async def handle_choice(callback: CallbackQuery):
     if option is None:
         action_text = ui.t(lang_key, "choosing_option", n=choice_num)
     elif option.get("requires_roll"):
-        roll_summary = await do_roll_and_describe(callback, lang_key, game)
+        roll_summary = await do_roll_and_describe(callback, lang_key, game, attribute=option.get("attribute"))
         action_text = f"{option['text']} — {roll_summary}"
     else:
         action_text = option["text"]

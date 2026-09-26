@@ -20,17 +20,21 @@ OPTION_LINE_RE = re.compile(r"^\s*\d[.)]\s*.+$", re.MULTILINE)
 
 def format_options(story_text: str, lang_key: str) -> tuple[str, list[dict]]:
     """Find numbered option lines and pull them out into a list of
-    {"text": ..., "requires_roll": bool} (for rendering as buttons), and
-    return the narrative with those lines removed entirely — options are
-    meant to live only in the buttons, not duplicated in the story text."""
+    {"text": ..., "requires_roll": bool, "attribute": str|None} (for
+    rendering as buttons), and return the narrative with those lines
+    removed entirely — options are meant to live only in the buttons, not
+    duplicated in the story text."""
     options: list[dict] = []
 
     def repl(match: re.Match) -> str:
         line = match.group(0)
         requires_roll = gemini_client.ROLL_MARKER in line
-        clean_line = line.replace(gemini_client.ROLL_MARKER, "").rstrip()
+        attr_match = gemini_client.ATTR_MARKER_RE.search(line)
+        attribute = attr_match.group(1).strip() if attr_match else None
+        clean_line = line.replace(gemini_client.ROLL_MARKER, "")
+        clean_line = gemini_client.ATTR_MARKER_RE.sub("", clean_line).rstrip()
         text_only = re.sub(r"^\s*\d[.)]\s*", "", clean_line)
-        options.append({"text": text_only, "requires_roll": requires_roll})
+        options.append({"text": text_only, "requires_roll": requires_roll, "attribute": attribute})
         return ""
 
     new_text = OPTION_LINE_RE.sub(repl, story_text)
@@ -56,19 +60,34 @@ async def maybe_summarize(game: GameState):
         logger.exception("Summary generation failed, skipping this round")
 
 
-def compute_roll(game: GameState, sides: int = 20) -> dict:
-    """Roll a die, applying the HP-based penalty, and classify the outcome
-    tier. Returns a plain dict so it's easy to send over the API too."""
-    hp = game.character.get("hp", gemini_client.DEFAULT_HP)
-    max_hp = game.character.get("max_hp", gemini_client.DEFAULT_HP)
-    penalty = dice.hp_penalty(hp, max_hp)
-    result = dice.roll(sides, modifier=penalty)
+def compute_modifier(character: dict, attribute: str | None = None) -> int:
+    """The modifier a roll would get right now: HP-based penalty, plus a
+    bonus/penalty from a linked attribute if one applies. Used both to
+    preview a modifier on a button (before rolling) and to actually apply
+    it when the roll happens, so the two always agree."""
+    hp = character.get("hp", gemini_client.DEFAULT_HP)
+    max_hp = character.get("max_hp", gemini_client.DEFAULT_HP)
+    modifier = dice.hp_penalty(hp, max_hp)
+    if attribute:
+        value = (character.get("attributes") or {}).get(attribute)
+        if value is not None:
+            modifier += dice.attribute_modifier(value)
+    return modifier
+
+
+def compute_roll(game: GameState, sides: int = 20, attribute: str | None = None) -> dict:
+    """Roll a die, applying the HP-based penalty and any linked-attribute
+    modifier, and classify the outcome tier. Returns a plain dict so it's
+    easy to send over the API too."""
+    modifier = compute_modifier(game.character, attribute)
+    result = dice.roll(sides, modifier=modifier)
     tier = dice.classify(result.value, result.total)
     return {
         "sides": sides,
         "value": result.value,
         "total": result.total,
-        "penalty": penalty,
+        "modifier": modifier,
+        "attribute": attribute,
         "tier": tier,
     }
 
@@ -76,7 +95,66 @@ def compute_roll(game: GameState, sides: int = 20) -> dict:
 def roll_action_text(roll_info: dict) -> str:
     """The English, language-independent action text fed to Gemini to
     describe a roll that already happened (see gemini_client's tier rules)."""
-    return f"roll result: {roll_info['tier']} (natural {roll_info['value']}, total {roll_info['total']})"
+    extra = f", modifier {roll_info['modifier']:+d} from {roll_info['attribute']}" if roll_info.get("attribute") else ""
+    return f"roll result: {roll_info['tier']} (natural {roll_info['value']}, total {roll_info['total']}{extra})"
+
+
+def _extract_number(value) -> float | None:
+    if value is None:
+        return None
+    match = re.search(r"-?\d+(\.\d+)?", str(value))
+    return float(match.group()) if match else None
+
+
+def compute_changes(prev_hp, prev_money, prev_inventory: list[str], character: dict) -> dict:
+    """Diff the character's state before/after a turn into a compact
+    {hp_delta, money_delta, inventory_added, inventory_removed} dict, so
+    the player can see at a glance what just changed."""
+    changes: dict = {}
+
+    new_hp = character.get("hp")
+    if prev_hp is not None and new_hp is not None and new_hp != prev_hp:
+        changes["hp_delta"] = new_hp - prev_hp
+
+    new_money = character.get("money")
+    prev_num = _extract_number(prev_money)
+    new_num = _extract_number(new_money)
+    if prev_num is not None and new_num is not None and new_num != prev_num:
+        delta = new_num - prev_num
+        changes["money_delta"] = int(delta) if delta == int(delta) else delta
+    elif new_money and new_money != prev_money and prev_money is not None:
+        changes["money_note"] = new_money
+
+    new_inventory = character.get("inventory") or []
+    added = [item for item in new_inventory if item not in prev_inventory]
+    removed = [item for item in prev_inventory if item not in new_inventory]
+    if added:
+        changes["inventory_added"] = added
+    if removed:
+        changes["inventory_removed"] = removed
+
+    return changes
+
+
+def format_changes_line(changes: dict) -> str:
+    """A compact, mostly-language-independent line like '❤️ -5   💰 +15
+    🎒 +sword, -torch' summarizing compute_changes()'s output."""
+    parts = []
+    hp_delta = changes.get("hp_delta")
+    if hp_delta:
+        parts.append(f"❤️ {hp_delta:+d}")
+    money_delta = changes.get("money_delta")
+    if money_delta:
+        parts.append(f"💰 {money_delta:+g}")
+    elif changes.get("money_note"):
+        parts.append(f"💰 {changes['money_note']}")
+    added = changes.get("inventory_added") or []
+    removed = changes.get("inventory_removed") or []
+    if added:
+        parts.append("🎒 +" + ", ".join(added))
+    if removed:
+        parts.append("🎒 -" + ", ".join(removed))
+    return "   ".join(parts)
 
 
 async def perform_turn(game: GameState, player_input: str) -> dict:
@@ -86,6 +164,10 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     surface it) — the game is NOT mutated/saved in that case."""
     lang_key = game.language
     game.add_turn(f"[Player]: {player_input}")
+
+    prev_hp = game.character.get("hp")
+    prev_money = game.character.get("money")
+    prev_inventory = list(game.character.get("inventory") or [])
 
     story_text = gemini_client.generate_story_turn(
         summary=game.summary,
@@ -108,6 +190,8 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     if "inventory" in parsed_state:
         game.character["inventory"] = parsed_state["inventory"]
 
+    changes = compute_changes(prev_hp, prev_money, prev_inventory, game.character)
+
     display_text, options = format_options(clean_text, lang_key)
 
     game.add_turn(f"[DM]: {clean_text}")
@@ -123,6 +207,8 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
         "character": game.character,
         "defeated": hp is not None and hp <= 0,
         "log": game.full_log,
+        "changes": changes,
+        "changes_line": format_changes_line(changes),
     }
 
 

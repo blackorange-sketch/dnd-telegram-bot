@@ -77,6 +77,21 @@
     background: var(--card);
     font-size: 15px;
   }
+  #changesResult { margin-bottom: 12px; }
+  .changes-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .delta {
+    padding: 5px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--card);
+  }
+  .delta.positive { color: #3ecf6e; }
+  .delta.negative { color: #e5484d; }
   .dice-anim {
     display: none;
     flex-direction: column;
@@ -346,6 +361,7 @@
       <div class="die-shadow" id="dieShadow"></div>
     </div>
     <div id="rollResult"></div>
+    <div id="changesResult"></div>
     <div id="story">Завантаження...</div>
     <div id="options"></div>
     <button class="btn" id="diceBtn" onclick="sendManualRoll()">🎲 Кинути d20</button>
@@ -526,13 +542,48 @@ function renderStory(text) {
   document.getElementById("story").textContent = text || "";
 }
 
+// Mirrors dice.py / core.py's modifier formulas, so the button preview
+// always matches what the server will actually apply when rolled.
+function hpPenalty(hp, maxHp) {
+  if (!maxHp || maxHp <= 0) return 0;
+  const ratio = hp / maxHp;
+  if (ratio <= 0.2) return -2;
+  if (ratio <= 0.45) return -1;
+  return 0;
+}
+
+function attributeModifier(value) {
+  const v = parseFloat(value);
+  if (isNaN(v)) return 0;
+  if (v <= 2) return -2;
+  if (v <= 4) return -1;
+  if (v <= 6) return 0;
+  if (v <= 8) return 1;
+  return 2;
+}
+
+function computeModifier(character, attribute) {
+  const hp = character?.hp ?? 30;
+  const maxHp = character?.max_hp ?? 30;
+  let modifier = hpPenalty(hp, maxHp);
+  if (attribute && character?.attributes && character.attributes[attribute] !== undefined) {
+    modifier += attributeModifier(character.attributes[attribute]);
+  }
+  return modifier;
+}
+
 function renderOptions(options) {
   const el = document.getElementById("options");
   el.innerHTML = "";
   (options || []).forEach((opt, i) => {
     const btn = document.createElement("button");
     btn.className = "btn";
-    btn.textContent = (i + 1) + ") " + opt.text + (opt.requires_roll ? " 🎲" : "");
+    let label = (i + 1) + ") " + opt.text;
+    if (opt.requires_roll) {
+      const modifier = computeModifier(lastCharacter, opt.attribute);
+      label += modifier ? ` 🎲${modifier > 0 ? "+" : ""}${modifier}` : " 🎲";
+    }
+    btn.textContent = label;
     btn.onclick = () => sendChoice(i + 1, opt.requires_roll);
     el.appendChild(btn);
   });
@@ -549,8 +600,29 @@ const TIER_LABEL = {
 function renderRoll(roll) {
   const el = document.getElementById("rollResult");
   if (!roll) { el.innerHTML = ""; return; }
-  const penaltyText = roll.penalty ? ` (штраф ${roll.penalty})` : "";
-  el.innerHTML = `<div class="roll-card">🎲 d${roll.sides}: ${roll.value}${penaltyText} → підсумок ${roll.total}<br>${TIER_LABEL[roll.tier] || roll.tier}</div>`;
+  const modifierText = roll.modifier ? ` (${roll.modifier > 0 ? "+" : ""}${roll.modifier})` : "";
+  el.innerHTML = `<div class="roll-card">🎲 d${roll.sides}: ${roll.value}${modifierText} → підсумок ${roll.total}<br>${TIER_LABEL[roll.tier] || roll.tier}</div>`;
+}
+
+function renderChanges(changes) {
+  const el = document.getElementById("changesResult");
+  if (!changes) { el.innerHTML = ""; return; }
+  const parts = [];
+  if (changes.hp_delta) {
+    const cls = changes.hp_delta > 0 ? "positive" : "negative";
+    parts.push(`<span class="delta ${cls}">❤️ ${changes.hp_delta > 0 ? "+" : ""}${changes.hp_delta}</span>`);
+  }
+  if (changes.money_delta) {
+    const cls = changes.money_delta > 0 ? "positive" : "negative";
+    parts.push(`<span class="delta ${cls}">💰 ${changes.money_delta > 0 ? "+" : ""}${changes.money_delta}</span>`);
+  } else if (changes.money_note) {
+    parts.push(`<span class="delta">💰 ${escapeHtml(changes.money_note)}</span>`);
+  }
+  (changes.inventory_added || []).forEach(item =>
+    parts.push(`<span class="delta positive">🎒 +${escapeHtml(item)}</span>`));
+  (changes.inventory_removed || []).forEach(item =>
+    parts.push(`<span class="delta negative">🎒 -${escapeHtml(item)}</span>`));
+  el.innerHTML = parts.length ? `<div class="changes-row">${parts.join("")}</div>` : "";
 }
 
 function renderCharacterView() {
@@ -633,6 +705,7 @@ function applyState(data) {
 
 function setLoading() {
   renderRoll(null);
+  renderChanges(null);
   document.getElementById("options").innerHTML = "";
   renderStory("...");
 }
@@ -662,6 +735,7 @@ function handleActionResult(data) {
     return;
   }
   renderRoll(data.roll);
+  renderChanges(data.changes);
   applyState(data);
   if (data.defeated) {
     document.getElementById("story").textContent += "\n\n💀 Персонаж втратив свідомість.";

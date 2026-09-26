@@ -30,6 +30,12 @@ ATTRS_TAG_RE = re.compile(r"\[ATTRS\]\s*(\{.*?\})\s*\[/ATTRS\]\s*$", re.DOTALL)
 # language (like the STATE tag, this literal token is always in English).
 ROLL_MARKER = "[ROLL]"
 
+# An [ATTR:Label] marker right after [ROLL] ties that option's roll to one
+# of the character's attributes (matched by exact label text).
+ATTR_MARKER_OPEN = "[ATTR:"
+ATTR_MARKER_CLOSE = "]"
+ATTR_MARKER_RE = re.compile(r"\[ATTR:([^\]]+)\]")
+
 SYSTEM_PROMPT = """\
 You are an experienced, vivid Dungeon Master running an interactive text \
 RPG adventure.
@@ -103,7 +109,15 @@ Follow these rules on every reply:
    append the literal token "{roll_marker}" at the very end of that \
    option's line (after the text, before the newline) — do not translate \
    or explain this token, just append it exactly as shown, and only on \
-   options that truly warrant a roll (not every option needs one).
+   options that truly warrant a roll (not every option needs one). If that \
+   option's success ALSO meaningfully depends on one of the character's \
+   attributes (shown in the character sheet in the context above), append \
+   right after "{roll_marker}" the literal token "{attr_marker_open}Label{attr_marker_close}" \
+   where Label is copied EXACTLY (same spelling/case) from one of the \
+   character's existing attribute names — e.g. "...text... {roll_marker}[ATTR:Сила]". \
+   Only add this when there's a genuine, obvious link (a strength-based \
+   action to the strength attribute, a social action to a charisma-like \
+   attribute, etc.) — most rolls don't need it.
 
 8. TONE: this is a mature-rated (adult) game. Violence can be graphic and \
    visceral when the scene calls for it — real injuries, blood, brutal \
@@ -148,7 +162,7 @@ Follow these rules on every reply:
     willpower — whatever suits the setting), each an integer from 1 to 10. \
     Never output this tag on ordinary story turns — attributes are set \
     once at character creation and stay fixed afterward.
-""".format(roll_marker=ROLL_MARKER)
+""".format(roll_marker=ROLL_MARKER, attr_marker_open=ATTR_MARKER_OPEN, attr_marker_close=ATTR_MARKER_CLOSE)
 
 
 def _configure():

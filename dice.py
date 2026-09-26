@@ -59,3 +59,22 @@ def classify(natural: int, total: int) -> str:
     if total <= 13:
         return "partial_success"
     return "success"
+
+
+def attribute_modifier(value) -> int:
+    """Convert a 1-10 character attribute value into a roll modifier, so a
+    weak attribute makes a matching check harder and a strong one makes it
+    easier. Kept as simple integer buckets, easy to show on a button."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if v <= 2:
+        return -2
+    if v <= 4:
+        return -1
+    if v <= 6:
+        return 0
+    if v <= 8:
+        return 1
+    return 2

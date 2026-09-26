@@ -212,7 +212,7 @@ async def api_action(request: web.Request) -> web.Response:
         if option is None:
             player_input = f"Choosing option {idx}"
         elif option.get("requires_roll"):
-            roll_info = core.compute_roll(game)
+            roll_info = core.compute_roll(game, attribute=option.get("attribute"))
             player_input = f"{option['text']} — {core.roll_action_text(roll_info)}"
         else:
             player_input = option["text"]
