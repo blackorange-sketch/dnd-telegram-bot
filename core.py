@@ -169,13 +169,24 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     prev_money = game.character.get("money")
     prev_inventory = list(game.character.get("inventory") or [])
 
-    story_text = gemini_client.generate_story_turn(
-        summary=game.summary,
-        recent_turns=game.recent_turns,
-        character=game.character,
-        player_input=player_input,
-        language_name=lang.prompt_name_for(lang_key),
-    )
+    try:
+        story_text = gemini_client.generate_story_turn(
+            summary=game.summary,
+            recent_turns=game.recent_turns,
+            character=game.character,
+            player_input=player_input,
+            language_name=lang.prompt_name_for(lang_key),
+        )
+    except gemini_client.ContentBlockedError:
+        logger.warning("Turn blocked by safety filter, retrying once with a softened prompt")
+        story_text = gemini_client.generate_story_turn(
+            summary=game.summary,
+            recent_turns=game.recent_turns,
+            character=game.character,
+            player_input=player_input,
+            language_name=lang.prompt_name_for(lang_key),
+            soften=True,
+        )
 
     clean_text, parsed_state = gemini_client.parse_state_tag(story_text)
     if "hp" in parsed_state:
@@ -242,13 +253,24 @@ def create_adventure(
         )
         character_record = {"gender": gender, "age": age, "generated": True}
 
-    opening = gemini_client.generate_new_adventure_opening(
-        category_label=wc.label_for(category_key, language_key),
-        category_hint=wc.hint_for(category_key),
-        world_description=world_description,
-        character_brief=character_brief,
-        language_name=language_name,
-    )
+    try:
+        opening = gemini_client.generate_new_adventure_opening(
+            category_label=wc.label_for(category_key, language_key),
+            category_hint=wc.hint_for(category_key),
+            world_description=world_description,
+            character_brief=character_brief,
+            language_name=language_name,
+        )
+    except gemini_client.ContentBlockedError:
+        logger.warning("Opening blocked by safety filter, retrying once with a softened prompt")
+        opening = gemini_client.generate_new_adventure_opening(
+            category_label=wc.label_for(category_key, language_key),
+            category_hint=wc.hint_for(category_key),
+            world_description=world_description,
+            character_brief=character_brief,
+            language_name=language_name,
+            soften=True,
+        )
 
     text_after_state, parsed_state = gemini_client.parse_state_tag(opening)
     clean_text, attrs = gemini_client.parse_attrs_tag(text_after_state)

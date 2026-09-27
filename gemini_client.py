@@ -316,12 +316,22 @@ def build_context(summary: str, recent_turns: list[str], character: dict) -> str
     return "\n\n".join(parts)
 
 
+SOFTEN_NOTE = (
+    "IMPORTANT: a previous attempt to generate this exact turn was blocked by "
+    "the safety filter for being too graphic/extreme. For this attempt, "
+    "significantly tone down violence, injury detail, and harsh language — "
+    "keep the scene tense and consequential, but far less graphic — while "
+    "still meaningfully advancing the story and following all other rules."
+)
+
+
 def generate_story_turn(
     summary: str,
     recent_turns: list[str],
     character: dict,
     player_input: str,
     language_name: str,
+    soften: bool = False,
 ) -> str:
     context = build_context(summary, recent_turns, character)
     state_line = _state_line(character)
@@ -333,6 +343,8 @@ def generate_story_turn(
         f"never invent or reset them): {state_line}\n\n"
         f"Player's action now: {player_input}"
     )
+    if soften:
+        prompt += f"\n\n{SOFTEN_NOTE}"
     model = get_model()
     response = model.generate_content(prompt)
     return _extract_text(response)
@@ -383,6 +395,7 @@ def generate_new_adventure_opening(
     world_description: str | None,
     character_brief: str,
     language_name: str,
+    soften: bool = False,
 ) -> str:
     """Generate the opening scene for a brand-new adventure.
 
@@ -410,6 +423,8 @@ def generate_new_adventure_opening(
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
         "with the character, then the list of action options."
     )
+    if soften:
+        prompt += f"\n\n{SOFTEN_NOTE}"
     model = get_model()
     response = model.generate_content(prompt)
     return _extract_text(response)
