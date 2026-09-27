@@ -170,7 +170,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     prev_inventory = list(game.character.get("inventory") or [])
 
     category_key = game.character.get("category")
-    category_hint = wc.hint_for(category_key) if category_key else None
+    category_hint = wc.short_hint_for(category_key) if category_key else None
 
     try:
         story_text = gemini_client.generate_story_turn(

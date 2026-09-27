@@ -99,6 +99,26 @@ def hint_for(key: str) -> str:
     return CATEGORIES[key]["hint"]
 
 
+# A compact one-line reminder for ONGOING turns. The full hint_for() text is
+# used just once, at the opening, where establishing genre in real detail
+# matters most and the cost is paid only a single time. Resending that full
+# paragraph on every subsequent turn would repeat ~60-80 words of static
+# text on every single API call for the rest of the game — this short
+# version keeps the genre-consistency nudge without that recurring cost.
+SHORT_HINTS = {
+    "fantasy": "medieval fantasy — magic, swords, gold coins, mythic tone",
+    "scifi": "sci-fi — starships, aliens, futuristic tech, credits, sense of wonder",
+    "postapo": "post-apocalypse — ruins, scavenged gear, mutants, gritty survival",
+    "horror": "horror — dread, unease, ambiguity; unsettling, not heroic",
+    "cyberpunk": "cyberpunk — neon megacity, corporations, implants, noir cynicism",
+    "steampunk": "steampunk — steam/clockwork tech, airships, brass, Victorian flavor",
+}
+
+
+def short_hint_for(key: str) -> str:
+    return SHORT_HINTS.get(key, hint_for(key))
+
+
 def random_label(lang_key: str) -> str:
     return RANDOM_LABELS.get(lang_key, RANDOM_LABELS["uk"])
 

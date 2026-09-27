@@ -271,11 +271,32 @@ def parse_attrs_tag(text: str) -> tuple[str, dict | None]:
 
 STATE_FIELDS = {"hp", "max_hp", "money", "inventory"}
 
+# Bookkeeping-only fields with zero value for the model to read every turn.
+NOISE_FIELDS = {"generated"}
+
+# Free-text fields that matter most once (at the opening, where they're used
+# in full) — for ongoing turns they're truncated, since their substance is
+# already reflected in the opening scene and carried forward via the running
+# summary/recent turns.
+TRUNCATE_FIELDS = {"description", "world_description"}
+TRUNCATE_LENGTH = 220
+
 
 def _background_dict(character: dict) -> dict:
     """Stable facts about the character (description, category, attributes,
-    etc.) — everything except the fields that change turn to turn."""
-    return {k: v for k, v in character.items() if k not in STATE_FIELDS}
+    etc.) — everything except the fields that change turn to turn. Trimmed
+    down for repeated per-turn use: this dict is resent on every single
+    call, so anything static and not strictly needed stays out or gets
+    shortened."""
+    background = {
+        k: v for k, v in character.items()
+        if k not in STATE_FIELDS and k not in NOISE_FIELDS
+    }
+    for key in TRUNCATE_FIELDS:
+        value = background.get(key)
+        if isinstance(value, str) and len(value) > TRUNCATE_LENGTH:
+            background[key] = value[:TRUNCATE_LENGTH].rstrip() + "…"
+    return background
 
 
 def _state_line(character: dict) -> str:
