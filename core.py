@@ -169,6 +169,9 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     prev_money = game.character.get("money")
     prev_inventory = list(game.character.get("inventory") or [])
 
+    category_key = game.character.get("category")
+    category_hint = wc.hint_for(category_key) if category_key else None
+
     try:
         story_text = gemini_client.generate_story_turn(
             summary=game.summary,
@@ -176,6 +179,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
             character=game.character,
             player_input=player_input,
             language_name=lang.prompt_name_for(lang_key),
+            category_hint=category_hint,
         )
         used_last_resort = False
     except gemini_client.ContentBlockedError:
@@ -187,6 +191,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
                 character=game.character,
                 player_input=player_input,
                 language_name=lang.prompt_name_for(lang_key),
+                category_hint=category_hint,
                 soften=True,
             )
             used_last_resort = False
@@ -203,6 +208,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
                 character=game.character,
                 player_input=player_input,
                 language_name=lang.prompt_name_for(lang_key),
+                category_hint=category_hint,
                 soften=True,
             )
             used_last_resort = True

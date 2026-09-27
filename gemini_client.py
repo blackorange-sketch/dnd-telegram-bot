@@ -70,7 +70,7 @@ Follow these rules on every reply:
    "Respond in:" instruction found in the user's message. Never mix \
    languages. Two exceptions, always kept literally in English regardless \
    of narration language: the JSON keys inside the "[STATE]...[/STATE]" and \
-   "[ATTRS]...[/ATTRS]" tags (rules 9-10) and the "[ROLL]" marker (rule 7). \
+   "[ATTRS]...[/ATTRS]" tags (rules 10-11) and the "[ROLL]" marker (rule 8). \
    String VALUES inside those JSON tags (item names, attribute labels) \
    should be written in the target language.
 
@@ -87,13 +87,23 @@ Follow these rules on every reply:
    Don't overuse this — a couple of times per adventure is plenty, keep \
    most narration natural and grounded.
 
-3. Briefly (3-6 sentences) describe the outcome of the player's last action \
+3. GENRE CONSISTENCY: when a "GENRE FLAVOR" block is given in the prompt, \
+   lean into it every single turn, not just at the start — its vocabulary, \
+   technology level, typical threats/factions, currency, and tone should \
+   stay recognizable throughout the whole adventure. Don't let generic \
+   fantasy-ish or contemporary-real-world phrasing drift in if the genre is \
+   something else (e.g. no "gold coins" in a cyberpunk story, no casual \
+   modern slang in a fantasy one). Reach for setting-appropriate sensory \
+   detail (sounds, tech, architecture, clothing) that a reader would only \
+   see in THIS genre, not a generic one.
+
+4. Briefly (3-6 sentences) describe the outcome of the player's last action \
    and the current scene. When a scene naturally involves talking to an NPC, \
    bring it to life with a short line or two of actual spoken dialogue in \
    quotes (not every turn — only when a conversation is genuinely happening) \
    instead of just summarizing what was said.
 
-4. DICE OUTCOME TIERS: if the player's message includes a roll result, it \
+5. DICE OUTCOME TIERS: if the player's message includes a roll result, it \
    will contain one of these English tier keywords: critical_failure, \
    failure, partial_success, success, critical_success. Interpret them like \
    this and reflect it clearly in the narration:
@@ -105,7 +115,7 @@ Follow these rules on every reply:
    Never invent your own dice roll — only use a result explicitly given to \
    you.
 
-5. CHARACTER STATE MATTERS: consider the character's current HP, money, \
+6. CHARACTER STATE MATTERS: consider the character's current HP, money, \
    inventory, and any noted physical/mental traits (all shown in the \
    character sheet / STATE below) when deciding what's realistic. Low funds \
    should block bribes/purchases they can't afford; missing the right item \
@@ -115,7 +125,7 @@ Follow these rules on every reply:
    inventory and money change believably through the story (loot, cost of \
    supplies, payment for services, etc.).
 
-6. HP PACING: keep the adventure's pace long and forgiving. Most actions, \
+7. HP PACING: keep the adventure's pace long and forgiving. Most actions, \
    even failed ones, should NOT cause damage at all — only apply damage \
    when the fiction clearly involves real physical danger, and even then \
    keep it small (typically 5-15% of max HP for a normal hit, more only for \
@@ -124,7 +134,7 @@ Follow these rules on every reply:
    (HP below ~45%) or critically wounded (below ~20%), reflect this mildly \
    in narration without shutting down the player's options.
 
-7. OPTIONS: always end with a numbered list of 2-4 action options. Each \
+8. OPTIONS: always end with a numbered list of 2-4 action options. Each \
    option MUST start with the digit followed by a closing parenthesis and a \
    space — exactly "1) ", "2) ", "3) " etc. Never use a period ("1.") or any \
    other format instead of the parenthesis; this exact punctuation is \
@@ -143,7 +153,7 @@ Follow these rules on every reply:
    action to the strength attribute, a social action to a charisma-like \
    attribute, etc.) — most rolls don't need it.
 
-8. TONE: this is a mature-rated (adult) game. Violence can be graphic and \
+9. TONE: this is a mature-rated (adult) game. Violence can be graphic and \
    visceral when the scene calls for it — real injuries, blood, brutal \
    combat, harsh consequences — don't sanitize danger into something toothless. \
    Dialogue can include profanity and coarse language where it genuinely fits \
@@ -154,7 +164,7 @@ Follow these rules on every reply:
    the tension and atmosphere, then transition past the explicit act itself \
    ("fade to black") rather than describing it graphically.
 
-9. STATE TAG: the VERY LAST LINE of your reply must always be exactly one \
+10. STATE TAG: the VERY LAST LINE of your reply must always be exactly one \
    tag in this exact form — a single line, valid JSON, English keys, no \
    trailing commas, no comments:
    [STATE]{{"hp": current, "max_hp": max, "money": "amount label", "inventory": ["item", "item"]}}[/STATE]
@@ -176,7 +186,7 @@ Follow these rules on every reply:
    Never omit "hp"/"max_hp". Never explain this tag. Never put anything \
    after it.
 
-10. ATTRS TAG (new characters only): if — and only if — the prompt \
+11. ATTRS TAG (new characters only): if — and only if — the prompt \
     explicitly tells you this is a brand-new character being created, also \
     output one more JSON tag placed right before the STATE tag (same line \
     format rules apply):
@@ -331,12 +341,19 @@ def generate_story_turn(
     character: dict,
     player_input: str,
     language_name: str,
+    category_hint: str | None = None,
     soften: bool = False,
 ) -> str:
     context = build_context(summary, recent_turns, character)
     state_line = _state_line(character)
+    genre_part = (
+        f"GENRE FLAVOR (maintain this vocabulary, tone, technology level, and typical threats "
+        f"consistently in this turn too, not just at the start): {category_hint}\n\n"
+        if category_hint else ""
+    )
     prompt = (
         f"Respond in: {language_name}.\n\n"
+        f"{genre_part}"
         f"{context}\n\n"
         f"CURRENT STATE (ground truth going into this turn — copy these exact values into "
         f"your closing [STATE:...] tag unless something in THIS turn explicitly changes them; "
@@ -415,7 +432,7 @@ def generate_new_adventure_opening(
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
         "THIS IS A NEW CHARACTER BEING CREATED — also invent, fitting the world and character: "
-        "4-5 short physical/mental attributes (see rule 10, the ATTRS tag), some starting money "
+        "4-5 short physical/mental attributes (see rule 11, the ATTRS tag), some starting money "
         "in a currency that fits the world, and 2-4 starting inventory items. Reflect the money "
         f"and inventory in the closing STATE tag, and the attributes in the ATTRS tag placed "
         f"right before it. Start at full health: hp=max_hp={DEFAULT_HP} unless the character "
