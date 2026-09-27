@@ -177,16 +177,35 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
             player_input=player_input,
             language_name=lang.prompt_name_for(lang_key),
         )
+        used_last_resort = False
     except gemini_client.ContentBlockedError:
         logger.warning("Turn blocked by safety filter, retrying once with a softened prompt")
-        story_text = gemini_client.generate_story_turn(
-            summary=game.summary,
-            recent_turns=game.recent_turns,
-            character=game.character,
-            player_input=player_input,
-            language_name=lang.prompt_name_for(lang_key),
-            soften=True,
-        )
+        try:
+            story_text = gemini_client.generate_story_turn(
+                summary=game.summary,
+                recent_turns=game.recent_turns,
+                character=game.character,
+                player_input=player_input,
+                language_name=lang.prompt_name_for(lang_key),
+                soften=True,
+            )
+            used_last_resort = False
+        except gemini_client.ContentBlockedError:
+            # The raw recent-turn history itself (not just the new action) is
+            # part of every prompt — if something graphic landed there a few
+            # turns back, it keeps getting re-sent and can keep tripping the
+            # filter no matter what the player picks next. Last resort: drop
+            # that raw history and lean on the compressed summary instead.
+            logger.warning("Still blocked after softening; retrying once more without raw recent-turn history")
+            story_text = gemini_client.generate_story_turn(
+                summary=game.summary,
+                recent_turns=[],
+                character=game.character,
+                player_input=player_input,
+                language_name=lang.prompt_name_for(lang_key),
+                soften=True,
+            )
+            used_last_resort = True
 
     clean_text, parsed_state = gemini_client.parse_state_tag(story_text)
     if "hp" in parsed_state:
@@ -204,6 +223,12 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     changes = compute_changes(prev_hp, prev_money, prev_inventory, game.character)
 
     display_text, options = format_options(clean_text, lang_key)
+
+    if used_last_resort:
+        # The dropped history was the likely culprit — don't carry it
+        # forward into future turns, or every subsequent turn would need
+        # the same 3-tier fallback again. Keep just this exchange.
+        game.recent_turns = [f"[Player]: {player_input}"]
 
     game.add_turn(f"[DM]: {clean_text}")
     game.pending_options = options
