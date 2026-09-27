@@ -11,12 +11,36 @@ import os
 import re
 
 import google.generativeai as genai
+from google.generativeai.types import HarmBlockThreshold, HarmCategory
 
 logger = logging.getLogger(__name__)
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
 DEFAULT_HP = 30
+
+# Loosen the categories relevant to a violent/dark adventure narrative so
+# ordinary combat/peril description isn't over-eagerly blocked. Sexual
+# content is deliberately left at Google's default (stricter) threshold —
+# this bot allows brutal violence, not explicit sexual content.
+SAFETY_SETTINGS = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+}
+
+
+class ContentBlockedError(RuntimeError):
+    """Raised when Gemini's safety filters blocked a response entirely
+    (empty candidates) — a clear, catchable case distinct from other
+    API/network failures."""
+
+
+def _extract_text(response) -> str:
+    if not response.candidates:
+        reason = getattr(getattr(response, "prompt_feedback", None), "block_reason", "unknown")
+        raise ContentBlockedError(f"Response blocked by Gemini's safety filter (reason: {reason})")
+    return response.text.strip()
 
 # Matches a trailing "[STATE]{"hp":18,"max_hp":30,...}[/STATE]" JSON block
 # the model is instructed to always append.
@@ -182,6 +206,7 @@ def get_model():
         _model = genai.GenerativeModel(
             model_name=GEMINI_MODEL,
             system_instruction=SYSTEM_PROMPT,
+            safety_settings=SAFETY_SETTINGS,
         )
     return _model
 
@@ -310,7 +335,7 @@ def generate_story_turn(
     )
     model = get_model()
     response = model.generate_content(prompt)
-    return response.text.strip()
+    return _extract_text(response)
 
 
 def generate_world_preview(category_label: str, category_hint: str, language_name: str) -> str:
@@ -325,7 +350,7 @@ def generate_world_preview(category_label: str, category_hint: str, language_nam
     )
     model = get_model()
     response = model.generate_content(prompt)
-    return response.text.strip()
+    return _extract_text(response)
 
 
 def generate_character_preview(
@@ -349,7 +374,7 @@ def generate_character_preview(
     )
     model = get_model()
     response = model.generate_content(prompt)
-    return response.text.strip()
+    return _extract_text(response)
 
 
 def generate_new_adventure_opening(
@@ -387,7 +412,7 @@ def generate_new_adventure_opening(
     )
     model = get_model()
     response = model.generate_content(prompt)
-    return response.text.strip()
+    return _extract_text(response)
 
 
 def generate_summary(existing_summary: str, recent_turns: list[str], language_name: str) -> str:
@@ -407,4 +432,4 @@ def generate_summary(existing_summary: str, recent_turns: list[str], language_na
     )
     model = get_model()
     response = model.generate_content(prompt)
-    return response.text.strip()
+    return _extract_text(response)

@@ -423,7 +423,10 @@ async def finalize_creation(message: Message, user_id: int, state: FSMContext):
         )
     except Exception as e:
         logger.exception("Gemini error")
-        await message.answer(ui.t(lang_key, "gemini_error", error=e))
+        if isinstance(e, gemini_client.ContentBlockedError):
+            await message.answer(ui.t(lang_key, "content_blocked"))
+        else:
+            await message.answer(ui.t(lang_key, "gemini_error", error=e))
         await state.clear()
         return
 
@@ -457,7 +460,16 @@ async def advance_story(message_or_callback, user_id: int, player_input: str):
             result = await core.perform_turn(game, player_input)
         except Exception as e:
             logger.exception("Gemini error")
-            await message_or_callback.answer(ui.t(lang_key, "gemini_error", error=e))
+            if isinstance(e, gemini_client.ContentBlockedError):
+                await message_or_callback.answer(ui.t(lang_key, "content_blocked"))
+            else:
+                await message_or_callback.answer(ui.t(lang_key, "gemini_error", error=e))
+            # The failed turn was never saved, so game.pending_options here is
+            # still the previous (valid) set — re-show them so the player can
+            # retry via button instead of being stuck with no options at all.
+            if game.pending_options:
+                kb = action_keyboard(game.pending_options, game.character)
+                await message_or_callback.answer(ui.t(lang_key, "retry_prompt"), reply_markup=kb)
             return
 
         kb = action_keyboard(result["options"], result["character"]) if result["options"] else None

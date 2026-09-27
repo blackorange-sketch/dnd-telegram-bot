@@ -237,7 +237,17 @@ async def api_action(request: web.Request) -> web.Response:
         result = await core.perform_turn(game, player_input)
     except Exception as e:
         logger.exception("Gemini error in Mini App action")
-        return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
+        error_key = "content_blocked" if isinstance(e, gemini_client.ContentBlockedError) else "gemini_error"
+        # The failed turn was never saved, so game.pending_options/character
+        # here are still the previous (valid) ones — send them back so the
+        # frontend can restore the option buttons instead of leaving a blank
+        # screen with no way to proceed except retyping.
+        return web.json_response({
+            "error": error_key,
+            "detail": str(e),
+            "options": game.pending_options,
+            "character": game.character,
+        }, status=502)
 
     if roll_info:
         result["roll"] = roll_info

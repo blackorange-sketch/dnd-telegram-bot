@@ -828,7 +828,20 @@ async function loadState() {
 
 function handleActionResult(data) {
   if (data.error) {
-    renderStory("Помилка: " + (data.detail || data.error));
+    const message = data.error === "content_blocked"
+      ? "⚠️ Цю дію заблокував фільтр безпеки Gemini (занадто екстремальний контент). Спробуй переформулювати дію м'якше — прогрес не втрачено, нічого перезапускати не треба."
+      : "Помилка: " + (data.detail || data.error);
+    renderStory(message);
+    renderRoll(null);
+    // The failed turn was never saved server-side, so the options/character
+    // sent back here are still the previous valid ones — restore the
+    // buttons instead of leaving the player with no way to proceed.
+    if (data.character) {
+      lastCharacter = data.character;
+      renderStatus(data.character);
+      applyTheme(lastCharacter && lastCharacter.category);
+    }
+    if (data.options) renderOptions(data.options);
     return;
   }
   renderRoll(data.roll);
