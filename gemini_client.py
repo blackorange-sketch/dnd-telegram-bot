@@ -42,13 +42,23 @@ def _extract_text(response) -> str:
         raise ContentBlockedError(f"Response blocked by Gemini's safety filter (reason: {reason})")
     return response.text.strip()
 
-# Matches a trailing "[STATE]{"hp":18,"max_hp":30,...}[/STATE]" JSON block
-# the model is instructed to always append.
-STATE_TAG_RE = re.compile(r"\[STATE\]\s*(\{.*?\})\s*\[/STATE\]\s*$", re.DOTALL)
+# Matches the "[STATE]{"hp":18,"max_hp":30,...}[/STATE]" JSON block the model
+# is instructed to append. Deliberately NOT anchored to the end of the text:
+# in long games the model sometimes puts options after the tag, and an
+# end-anchored pattern would then miss it and leak the raw tag to the player.
+STATE_TAG_RE = re.compile(r"\[STATE\]\s*(\{.*?\})\s*\[/STATE\]", re.DOTALL)
 
 # Matches an "[ATTRS]{"Strength":6,...}[/ATTRS]" JSON block, only expected
 # once, right before the STATE tag, when a brand-new character is created.
-ATTRS_TAG_RE = re.compile(r"\[ATTRS\]\s*(\{.*?\})\s*\[/ATTRS\]\s*$", re.DOTALL)
+ATTRS_TAG_RE = re.compile(r"\[ATTRS\]\s*(\{.*?\})\s*\[/ATTRS\]", re.DOTALL)
+
+# Leftover from a truncated/garbled reply: an opening tag with NO matching
+# close anywhere after it. Stripped defensively so raw tag text never reaches
+# the player. The lookahead matters — a complete tag of the other kind (e.g.
+# a valid [ATTRS] block while we're cleaning up after [STATE]) must survive.
+DANGLING_TAG_RE = re.compile(
+    r"\[STATE\](?!.*\[/STATE\]).*$|\[ATTRS\](?!.*\[/ATTRS\]).*$", re.DOTALL
+)
 
 # Marks a numbered option as requiring a dice roll, independent of narration
 # language (like the STATE tag, this literal token is always in English).
@@ -181,8 +191,13 @@ Follow these rules on every reply:
      has an established currency; omit the key only if truly not \
      applicable yet.
    - "inventory" is a JSON array of short strings, one per notable item \
-     (e.g. "rusty sword", "health potion x2") — keep it concise, a handful \
-     of items, not a huge dump.
+     (e.g. "rusty sword", "health potion x2"). KEEP IT LEAN: at most about \
+     10 items. An item that is destroyed, broken beyond use, empty, or used \
+     up must be REMOVED from the list — never keep it with a label like \
+     "(destroyed)" or "(empty)". Merge duplicates into one entry with a \
+     count ("energy cell x3"), and drop trivial junk. This pruning is \
+     allowed on any turn, even when nothing else about the item changed. \
+     The tag itself must stay compact — it is resent to you every turn.
    Never omit "hp"/"max_hp". Never explain this tag. Never put anything \
    after it.
 
@@ -221,51 +236,60 @@ def get_model():
     return _model
 
 
+def _clean_after_tag_removal(text: str) -> str:
+    """Drop any dangling half-tag (truncated/garbled reply) and tidy the
+    blank lines a removed tag leaves behind."""
+    text = DANGLING_TAG_RE.sub("", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def parse_state_tag(text: str) -> tuple[str, dict]:
-    """Strip the trailing [STATE]{...}[/STATE] JSON tag and return
-    (clean_text, state). state may contain keys: hp, max_hp, money,
-    inventory (a list) — any of them can be missing if the model omitted
-    that part, and the whole dict is empty if the JSON was malformed."""
-    match = STATE_TAG_RE.search(text.strip())
-    if not match:
-        return text.strip(), {}
-
+    """Find the [STATE]{...}[/STATE] JSON tag ANYWHERE in the reply, strip it
+    out, and return (clean_text, state). state may contain keys: hp, max_hp,
+    money, inventory (a list) — any of them can be missing if the model
+    omitted that part, and the dict is empty if there was no valid tag or the
+    JSON was malformed. The tag is always removed from the text regardless,
+    so raw tag text can never leak to the player."""
+    matches = list(STATE_TAG_RE.finditer(text))
     state: dict = {}
-    try:
-        data = json.loads(match.group(1))
-        hp, max_hp = data.get("hp"), data.get("max_hp")
-        if isinstance(hp, int) and isinstance(max_hp, int):
-            state["hp"] = hp
-            state["max_hp"] = max_hp
-        money = data.get("money")
-        if isinstance(money, str) and money:
-            state["money"] = money
-        inventory = data.get("inventory")
-        if isinstance(inventory, list):
-            state["inventory"] = [str(item) for item in inventory]
-    except (json.JSONDecodeError, AttributeError, TypeError) as e:
-        logger.warning("Failed to parse STATE tag JSON (%s): %r", e, match.group(1))
+    if matches:
+        raw = matches[-1].group(1)  # if there are several, the last one wins
+        try:
+            data = json.loads(raw)
+            hp, max_hp = data.get("hp"), data.get("max_hp")
+            if isinstance(hp, int) and isinstance(max_hp, int):
+                state["hp"] = hp
+                state["max_hp"] = max_hp
+            money = data.get("money")
+            if isinstance(money, str) and money:
+                state["money"] = money
+            inventory = data.get("inventory")
+            if isinstance(inventory, list):
+                state["inventory"] = [str(item) for item in inventory]
+        except (json.JSONDecodeError, AttributeError, TypeError) as e:
+            logger.warning("Failed to parse STATE tag JSON (%s): %r", e, raw)
 
-    clean = STATE_TAG_RE.sub("", text).strip()
+    clean = _clean_after_tag_removal(STATE_TAG_RE.sub("", text))
     return clean, state
 
 
 def parse_attrs_tag(text: str) -> tuple[str, dict | None]:
-    """Strip the trailing [ATTRS]{...}[/ATTRS] JSON tag (only expected once,
-    at character creation) and return (clean_text, attrs_dict_or_None)."""
-    match = ATTRS_TAG_RE.search(text.strip())
-    if not match:
-        return text.strip(), None
-
+    """Find the [ATTRS]{...}[/ATTRS] JSON tag (only expected once, at
+    character creation) anywhere in the reply, strip it out, and return
+    (clean_text, attrs_dict_or_None)."""
+    matches = list(ATTRS_TAG_RE.finditer(text))
     attrs = None
-    try:
-        data = json.loads(match.group(1))
-        if isinstance(data, dict) and data:
-            attrs = {str(k): v for k, v in data.items()}
-    except (json.JSONDecodeError, AttributeError, TypeError) as e:
-        logger.warning("Failed to parse ATTRS tag JSON (%s): %r", e, match.group(1))
+    if matches:
+        raw = matches[-1].group(1)
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and data:
+                attrs = {str(k): v for k, v in data.items()}
+        except (json.JSONDecodeError, AttributeError, TypeError) as e:
+            logger.warning("Failed to parse ATTRS tag JSON (%s): %r", e, raw)
 
-    clean = ATTRS_TAG_RE.sub("", text).strip()
+    clean = _clean_after_tag_removal(ATTRS_TAG_RE.sub("", text))
     return clean, attrs
 
 
