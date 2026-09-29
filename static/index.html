@@ -116,6 +116,69 @@
     color: var(--btn-text);
   }
   .view { display: none; }
+
+  /* --- Side menu (settings drawer) --- */
+  .menu-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+    z-index: 20;
+  }
+  .menu-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .side-menu {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(300px, 82vw);
+    background: var(--bg);
+    border-left: 1px solid var(--card);
+    transform: translateX(100%);
+    transition: transform 0.28s ease;
+    z-index: 21;
+    padding: calc(16px + env(safe-area-inset-top, 0px)) 16px 16px;
+    overflow-y: auto;
+  }
+  .side-menu.open { transform: translateX(0); }
+  .side-menu-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+    font-size: 17px;
+    font-weight: 700;
+    font-family: var(--font-heading);
+  }
+  .menu-close {
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+  .side-menu-section { margin-bottom: 22px; }
+  .menu-toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--card);
+    cursor: pointer;
+  }
+  .menu-toggle-row input { transform: scale(1.15); }
+  .menu-log-list {
+    max-height: 40vh;
+    overflow-y: auto;
+  }
   .view.active { display: block; }
 
   /* --- Story view --- */
@@ -411,7 +474,28 @@
   <div id="tabs" style="display:none;">
     <button class="tab-btn active" id="tabStoryBtn" onclick="switchTab('story')">🗺️ Історія</button>
     <button class="tab-btn" id="tabCharBtn" onclick="switchTab('character')">🧙 Персонаж</button>
-    <button class="tab-btn" id="tabLogBtn" onclick="switchTab('log')">📜 Лог</button>
+    <button class="tab-btn" id="menuBtn" onclick="openMenu()">☰ Меню</button>
+  </div>
+
+  <div class="menu-overlay" id="menuOverlay" onclick="closeMenu()"></div>
+  <div class="side-menu" id="sideMenu">
+    <div class="side-menu-header">
+      <span>⚙️ Меню</span>
+      <button class="menu-close" onclick="closeMenu()">✕</button>
+    </div>
+
+    <div class="side-menu-section">
+      <div class="section-title">Вигляд</div>
+      <label class="menu-toggle-row">
+        <span>Тема категорії світу</span>
+        <input type="checkbox" id="themeToggle" onchange="onThemeToggleChange()">
+      </label>
+    </div>
+
+    <div class="side-menu-section">
+      <div class="section-title">Історія ходів</div>
+      <div class="menu-log-list" id="menuLogList"></div>
+    </div>
   </div>
 
   <div id="onboardingView" class="view active"></div>
@@ -450,10 +534,6 @@
     <div id="charInventory"></div>
   </div>
 
-  <div id="logView" class="view">
-    <div id="logList"></div>
-  </div>
-
 <script>
 const tg = window.Telegram.WebApp;
 tg.ready();
@@ -464,6 +544,11 @@ let lastCharacter = null;
 let lastLog = [];
 let diceInterval = null;
 let currentThemeIcon = "";
+let useCategoryTheme = localStorage.getItem("useCategoryTheme") !== "false"; // default: on
+
+// Neutral dice look used when the person prefers Telegram's own theme
+// instead of the per-category one.
+const NEUTRAL_DICE = { dice: 0x5b6373, edge: 0x14151a, light: 0xffffff };
 
 // Per-category visual theme: CSS handles colors/fonts/background via
 // html[data-theme], this map covers what only JS can touch (the 3D dice
@@ -478,13 +563,14 @@ const THEMES = {
 };
 
 function applyTheme(category) {
-  const theme = THEMES[category];
+  const theme = useCategoryTheme ? THEMES[category] : null;
   document.documentElement.dataset.theme = theme ? category : "";
   currentThemeIcon = theme ? theme.icon : "";
-  if (theme && dieMesh) {
-    dieMesh.material.color.setHex(theme.dice);
-    if (diceEdgeMaterial) diceEdgeMaterial.color.setHex(theme.edge);
-    if (diceKeyLight) diceKeyLight.color.setHex(theme.light);
+  const diceColors = theme || NEUTRAL_DICE;
+  if (dieMesh) {
+    dieMesh.material.color.setHex(diceColors.dice);
+    if (diceEdgeMaterial) diceEdgeMaterial.color.setHex(diceColors.edge);
+    if (diceKeyLight) diceKeyLight.color.setHex(diceColors.light);
   }
 }
 
@@ -593,12 +679,27 @@ function stopDiceAnimation(finalValue) {
 function switchTab(name) {
   document.getElementById("storyView").classList.toggle("active", name === "story");
   document.getElementById("characterView").classList.toggle("active", name === "character");
-  document.getElementById("logView").classList.toggle("active", name === "log");
   document.getElementById("tabStoryBtn").classList.toggle("active", name === "story");
   document.getElementById("tabCharBtn").classList.toggle("active", name === "character");
-  document.getElementById("tabLogBtn").classList.toggle("active", name === "log");
   if (name === "character") renderCharacterView();
-  if (name === "log") renderLogView();
+}
+
+function openMenu() {
+  document.getElementById("menuOverlay").classList.add("visible");
+  document.getElementById("sideMenu").classList.add("open");
+  document.getElementById("themeToggle").checked = useCategoryTheme;
+  renderMenuLog();
+}
+
+function closeMenu() {
+  document.getElementById("menuOverlay").classList.remove("visible");
+  document.getElementById("sideMenu").classList.remove("open");
+}
+
+function onThemeToggleChange() {
+  useCategoryTheme = document.getElementById("themeToggle").checked;
+  localStorage.setItem("useCategoryTheme", useCategoryTheme ? "true" : "false");
+  applyTheme(lastCharacter && lastCharacter.category);
 }
 
 async function api(path, body) {
@@ -766,8 +867,8 @@ function renderCharacterView() {
   }
 }
 
-function renderLogView() {
-  const el = document.getElementById("logList");
+function renderMenuLog() {
+  const el = document.getElementById("menuLogList");
   if (!lastLog.length) {
     el.innerHTML = `<div class="empty-note">Історія ще порожня</div>`;
     return;
@@ -790,8 +891,8 @@ function applyState(data) {
   if (document.getElementById("characterView").classList.contains("active")) {
     renderCharacterView();
   }
-  if (document.getElementById("logView").classList.contains("active")) {
-    renderLogView();
+  if (document.getElementById("sideMenu").classList.contains("open")) {
+    renderMenuLog();
   }
 }
 
@@ -925,9 +1026,9 @@ function showWizardError(data) {
 function startOnboarding() {
   applyTheme(null);
   showTabs(false);
+  closeMenu();
   document.getElementById("storyView").classList.remove("active");
   document.getElementById("characterView").classList.remove("active");
-  document.getElementById("logView").classList.remove("active");
   document.getElementById("onboardingView").classList.add("active");
   renderLanguageStep();
 }
