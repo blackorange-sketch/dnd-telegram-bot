@@ -175,9 +175,31 @@
     cursor: pointer;
   }
   .menu-toggle-row input { transform: scale(1.15); }
+  .menu-log-details { margin: 0; }
+  .side-menu-section .menu-log-summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--card);
+    cursor: pointer;
+    margin: 0;
+    list-style: none;
+  }
+  .menu-log-summary::-webkit-details-marker { display: none; }
+  .menu-log-summary::after {
+    content: "▸";
+    color: var(--hint);
+    transition: transform 0.2s ease;
+  }
+  .menu-log-details[open] .menu-log-summary::after {
+    transform: rotate(90deg);
+  }
   .menu-log-list {
     max-height: 40vh;
     overflow-y: auto;
+    margin-top: 8px;
   }
   .view.active { display: block; }
 
@@ -493,8 +515,10 @@
     </div>
 
     <div class="side-menu-section">
-      <div class="section-title">Історія ходів</div>
-      <div class="menu-log-list" id="menuLogList"></div>
+      <details class="menu-log-details">
+        <summary class="section-title menu-log-summary">📜 Історія ходів</summary>
+        <div class="menu-log-list" id="menuLogList"></div>
+      </details>
     </div>
   </div>
 
