@@ -279,7 +279,7 @@ async def show_world_preview(message: Message, state: FSMContext):
     category_key = data.get("category_key", random.choice(wc.all_keys()))
     generating_msg = await message.answer(ui.t(lang_key, "generating_preview"))
     try:
-        preview = gemini_client.generate_world_preview(
+        preview = await gemini_client.generate_world_preview(
             category_label=wc.label_for(category_key, lang_key),
             category_hint=wc.hint_for(category_key),
             language_name=lang.prompt_name_for(lang_key),
@@ -365,7 +365,7 @@ async def show_character_preview(message: Message, state: FSMContext):
     category_key = data.get("category_key")
     generating_msg = await message.answer(ui.t(lang_key, "generating_preview"))
     try:
-        preview = gemini_client.generate_character_preview(
+        preview = await gemini_client.generate_character_preview(
             gender=data.get("gender", "any"),
             age=data.get("age", "any"),
             world_description=data.get("world_description"),
@@ -412,7 +412,7 @@ async def finalize_creation(message: Message, user_id: int, state: FSMContext):
     await message.answer(ui.t(lang_key, "creating"))
 
     try:
-        result = core.create_adventure(
+        result = await core.create_adventure(
             user_id=user_id,
             language_key=lang_key,
             category_key=category_key,

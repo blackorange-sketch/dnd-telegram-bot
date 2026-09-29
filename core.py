@@ -49,7 +49,7 @@ async def maybe_summarize(game: GameState):
     if game.turn_count == 0 or game.turn_count % SUMMARY_EVERY_N_TURNS != 0:
         return
     try:
-        new_summary = gemini_client.generate_summary(
+        new_summary = await gemini_client.generate_summary(
             existing_summary=game.summary,
             recent_turns=game.recent_turns,
             language_name=lang.prompt_name_for(game.language),
@@ -173,7 +173,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     category_hint = wc.short_hint_for(category_key) if category_key else None
 
     try:
-        story_text = gemini_client.generate_story_turn(
+        story_text = await gemini_client.generate_story_turn(
             summary=game.summary,
             recent_turns=game.recent_turns,
             character=game.character,
@@ -185,7 +185,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     except gemini_client.ContentBlockedError:
         logger.warning("Turn blocked by safety filter, retrying once with a softened prompt")
         try:
-            story_text = gemini_client.generate_story_turn(
+            story_text = await gemini_client.generate_story_turn(
                 summary=game.summary,
                 recent_turns=game.recent_turns,
                 character=game.character,
@@ -202,7 +202,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
             # filter no matter what the player picks next. Last resort: drop
             # that raw history and lean on the compressed summary instead.
             logger.warning("Still blocked after softening; retrying once more without raw recent-turn history")
-            story_text = gemini_client.generate_story_turn(
+            story_text = await gemini_client.generate_story_turn(
                 summary=game.summary,
                 recent_turns=[],
                 character=game.character,
@@ -254,7 +254,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     }
 
 
-def create_adventure(
+async def create_adventure(
     user_id: int,
     language_key: str,
     category_key: str,
@@ -285,7 +285,7 @@ def create_adventure(
         character_record = {"gender": gender, "age": age, "generated": True}
 
     try:
-        opening = gemini_client.generate_new_adventure_opening(
+        opening = await gemini_client.generate_new_adventure_opening(
             category_label=wc.label_for(category_key, language_key),
             category_hint=wc.hint_for(category_key),
             world_description=world_description,
@@ -294,7 +294,7 @@ def create_adventure(
         )
     except gemini_client.ContentBlockedError:
         logger.warning("Opening blocked by safety filter, retrying once with a softened prompt")
-        opening = gemini_client.generate_new_adventure_opening(
+        opening = await gemini_client.generate_new_adventure_opening(
             category_label=wc.label_for(category_key, language_key),
             category_hint=wc.hint_for(category_key),
             world_description=world_description,

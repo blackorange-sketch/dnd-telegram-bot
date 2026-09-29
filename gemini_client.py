@@ -5,6 +5,7 @@ Uses gemini-3.6-flash by default — noticeably better narration quality than
 "gemini-3.5-flash-lite" if you want the cheaper/faster tier instead.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -380,7 +381,7 @@ SOFTEN_NOTE = (
 )
 
 
-def generate_story_turn(
+async def generate_story_turn(
     summary: str,
     recent_turns: list[str],
     character: dict,
@@ -408,11 +409,11 @@ def generate_story_turn(
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
     model = get_model()
-    response = model.generate_content(prompt)
+    response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)
 
 
-def generate_world_preview(category_label: str, category_hint: str, language_name: str) -> str:
+async def generate_world_preview(category_label: str, category_hint: str, language_name: str) -> str:
     """A short, standalone world concept the player can accept or reroll —
     not part of the actual adventure yet, so no STATE tag or options here."""
     prompt = (
@@ -423,11 +424,11 @@ def generate_world_preview(category_label: str, category_hint: str, language_nam
         f"({category_hint}) adventure. Give it a distinct hook or twist so it doesn't feel generic."
     )
     model = get_model()
-    response = model.generate_content(prompt)
+    response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)
 
 
-def generate_character_preview(
+async def generate_character_preview(
     gender: str,
     age: str,
     world_description: str | None,
@@ -447,11 +448,11 @@ def generate_character_preview(
         "one-line backstory hook."
     )
     model = get_model()
-    response = model.generate_content(prompt)
+    response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)
 
 
-def generate_new_adventure_opening(
+async def generate_new_adventure_opening(
     category_label: str,
     category_hint: str,
     world_description: str | None,
@@ -488,11 +489,11 @@ def generate_new_adventure_opening(
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
     model = get_model()
-    response = model.generate_content(prompt)
+    response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)
 
 
-def generate_summary(existing_summary: str, recent_turns: list[str], language_name: str) -> str:
+async def generate_summary(existing_summary: str, recent_turns: list[str], language_name: str) -> str:
     """Compress the previous summary plus recent turns into one short,
     updated summary — called periodically to keep long-term context (money,
     inventory, plot threads, relationships) alive without an ever-growing
@@ -508,5 +509,5 @@ def generate_summary(existing_summary: str, recent_turns: list[str], language_na
         "Recent events:\n" + "\n".join(recent_turns)
     )
     model = get_model()
-    response = model.generate_content(prompt)
+    response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)

@@ -114,7 +114,7 @@ async def api_preview_world(request: web.Request) -> web.Response:
     lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
     category_key = body.get("category", wc.all_keys()[0])
     try:
-        preview = gemini_client.generate_world_preview(
+        preview = await gemini_client.generate_world_preview(
             category_label=wc.label_for(category_key, lang_key),
             category_hint=wc.hint_for(category_key),
             language_name=lang.prompt_name_for(lang_key),
@@ -137,7 +137,7 @@ async def api_preview_character(request: web.Request) -> web.Response:
     lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
     category_key = body.get("category", wc.all_keys()[0])
     try:
-        preview = gemini_client.generate_character_preview(
+        preview = await gemini_client.generate_character_preview(
             gender=body.get("gender", "any"),
             age=body.get("age", "any"),
             world_description=body.get("world_description"),
@@ -165,7 +165,7 @@ async def api_create(request: web.Request) -> web.Response:
     category_key = body.get("category", wc.all_keys()[0])
 
     try:
-        result = core.create_adventure(
+        result = await core.create_adventure(
             user_id=user_id,
             language_key=lang_key,
             category_key=category_key,
