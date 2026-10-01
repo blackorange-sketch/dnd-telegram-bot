@@ -502,21 +502,21 @@
   <div class="menu-overlay" id="menuOverlay" onclick="closeMenu()"></div>
   <div class="side-menu" id="sideMenu">
     <div class="side-menu-header">
-      <span>⚙️ Меню</span>
+      <span id="menuTitle">⚙️ Меню</span>
       <button class="menu-close" onclick="closeMenu()">✕</button>
     </div>
 
     <div class="side-menu-section">
-      <div class="section-title">Вигляд</div>
+      <div class="section-title" id="appearanceTitle">Вигляд</div>
       <label class="menu-toggle-row">
-        <span>Тема категорії світу</span>
+        <span id="categoryThemeLabel">Тема категорії світу</span>
         <input type="checkbox" id="themeToggle" onchange="onThemeToggleChange()">
       </label>
     </div>
 
     <div class="side-menu-section">
       <details class="menu-log-details">
-        <summary class="section-title menu-log-summary">📜 Історія ходів</summary>
+        <summary class="section-title menu-log-summary" id="logTitle">📜 Історія ходів</summary>
         <div class="menu-log-list" id="menuLogList"></div>
       </details>
     </div>
@@ -545,16 +545,16 @@
   </div>
 
   <div id="characterView" class="view">
-    <div class="section-title">Здоров'я</div>
+    <div class="section-title" id="healthTitle">Здоров'я</div>
     <div id="charHp"></div>
 
-    <div class="section-title">Гроші</div>
+    <div class="section-title" id="moneyTitle">Гроші</div>
     <div id="charMoney"></div>
 
-    <div class="section-title">Характеристики</div>
+    <div class="section-title" id="attrsTitle">Характеристики</div>
     <div id="charAttrs"></div>
 
-    <div class="section-title">Інвентар</div>
+    <div class="section-title" id="invTitle">Інвентар</div>
     <div id="charInventory"></div>
   </div>
 
@@ -563,6 +563,38 @@ const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 const initData = tg.initData;
+
+// Localized UI strings for the game screen (tabs, menu, section titles,
+// errors) — fetched once via /api/ui as soon as we know the game's
+// language, either from /api/state (existing game) or from the wizard's
+// chosen language (new game, see startAdventure()).
+let gameUi = null;
+
+function t(key, vars) {
+  let template = (gameUi && gameUi[key]) || key;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      template = template.split(`{${k}}`).join(v);
+    }
+  }
+  return template;
+}
+
+function localizeStaticUI() {
+  document.getElementById("tabStoryBtn").textContent = "🗺️ " + t("tab_story");
+  document.getElementById("tabCharBtn").textContent = "🧙 " + t("tab_character");
+  document.getElementById("menuBtn").textContent = "☰ " + t("menu_label");
+  document.getElementById("menuTitle").textContent = "⚙️ " + t("menu_label");
+  document.getElementById("appearanceTitle").textContent = t("appearance_title");
+  document.getElementById("categoryThemeLabel").textContent = t("category_theme_label");
+  document.getElementById("logTitle").textContent = "📜 " + t("log_title");
+  document.getElementById("healthTitle").textContent = t("health_title");
+  document.getElementById("moneyTitle").textContent = t("money_title");
+  document.getElementById("attrsTitle").textContent = t("attributes_title");
+  document.getElementById("invTitle").textContent = t("inventory_title");
+  document.getElementById("diceBtn").textContent = "🎲 " + t("roll_button_label");
+  document.getElementById("freeText").placeholder = t("free_text_placeholder");
+}
 
 let lastCharacter = null;
 let lastLog = [];
@@ -805,19 +837,21 @@ function renderOptions(options) {
   });
 }
 
-const TIER_LABEL = {
-  critical_failure: "💥 Фатальна невдача",
-  failure: "❌ Невдача",
-  partial_success: "➖ Частковий успіх",
-  success: "✅ Успіх",
-  critical_success: "🌟 Критичний успіх",
-};
+function tierLabel(tier) {
+  const emoji = {
+    critical_failure: "💥", failure: "❌", partial_success: "➖",
+    success: "✅", critical_success: "🌟",
+  }[tier] || "";
+  return `${emoji} ${t("tier_" + tier)}`.trim();
+}
 
 function renderRoll(roll) {
   const el = document.getElementById("rollResult");
   if (!roll) { el.innerHTML = ""; return; }
   const modifierText = roll.modifier ? ` (${roll.modifier > 0 ? "+" : ""}${roll.modifier})` : "";
-  el.innerHTML = `<div class="roll-card">🎲 d${roll.sides}: ${roll.value}${modifierText} → підсумок ${roll.total}<br>${TIER_LABEL[roll.tier] || roll.tier}</div>`;
+  const rollLine = t("dice_roll_label", { sides: roll.sides }) + `: ${roll.value}${modifierText}`;
+  const totalLine = t("dice_total", { total: roll.total });
+  el.innerHTML = `<div class="roll-card">${rollLine}<br>${totalLine}<br>${tierLabel(roll.tier)}</div>`;
 }
 
 function renderChanges(changes) {
@@ -856,14 +890,14 @@ function renderCharacterView() {
   // Money
   document.getElementById("charMoney").innerHTML = c.money
     ? `<div class="money-line">💰 ${c.money}</div>`
-    : `<div class="empty-note">Невідомо</div>`;
+    : `<div class="empty-note">${t("unknown_value")}</div>`;
 
   // Attributes
   const attrs = c.attributes || {};
   const attrKeys = Object.keys(attrs);
   const attrsEl = document.getElementById("charAttrs");
   if (!attrKeys.length) {
-    attrsEl.innerHTML = `<div class="empty-note">Немає даних</div>`;
+    attrsEl.innerHTML = `<div class="empty-note">${t("no_data_note")}</div>`;
   } else {
     attrsEl.innerHTML = attrKeys.map(key => {
       const raw = attrs[key];
@@ -883,7 +917,7 @@ function renderCharacterView() {
   const items = c.inventory || [];
   const invEl = document.getElementById("charInventory");
   if (!items.length) {
-    invEl.innerHTML = `<div class="empty-note">Порожньо</div>`;
+    invEl.innerHTML = `<div class="empty-note">${t("empty_note_generic")}</div>`;
   } else {
     invEl.innerHTML = `<div class="inv-grid">` +
       items.map(item => `<div class="inv-item">🎒 ${item}</div>`).join("") +
@@ -894,7 +928,7 @@ function renderCharacterView() {
 function renderMenuLog() {
   const el = document.getElementById("menuLogList");
   if (!lastLog.length) {
-    el.innerHTML = `<div class="empty-note">Історія ще порожня</div>`;
+    el.innerHTML = `<div class="empty-note">${t("empty_log_note")}</div>`;
     return;
   }
   el.innerHTML = lastLog.map(entry => {
@@ -905,9 +939,13 @@ function renderMenuLog() {
   el.scrollTop = el.scrollHeight;
 }
 
-function applyState(data) {
+async function applyState(data) {
   lastCharacter = data.character || null;
   if (data.log) lastLog = data.log;
+  if (data.language && !gameUi) {
+    gameUi = await fetch(`/api/ui?lang=${data.language}`).then(r => r.json());
+    localizeStaticUI();
+  }
   applyTheme(lastCharacter && lastCharacter.category);
   renderStatus(data.character);
   renderStory(data.text);
@@ -942,20 +980,20 @@ async function loadState() {
     showTabs(false);
     document.getElementById("onboardingView").classList.add("active");
     document.getElementById("onboardingView").innerHTML =
-      `<div class="wiz-loading">Не вдалося авторизуватись. Відкрий цю сторінку через кнопку в боті.</div>`;
+      `<div class="wiz-loading">${t("unauthorized_note")}</div>`;
     return;
   }
   showTabs(true);
   document.getElementById("onboardingView").classList.remove("active");
   document.getElementById("storyView").classList.add("active");
-  applyState(data);
+  await applyState(data);
 }
 
 function handleActionResult(data) {
   if (data.error) {
     const message = data.error === "content_blocked"
-      ? "⚠️ Цю дію заблокував фільтр безпеки Gemini (занадто екстремальний контент). Спробуй переформулювати дію м'якше — прогрес не втрачено, нічого перезапускати не треба."
-      : "Помилка: " + (data.detail || data.error);
+      ? t("content_blocked")
+      : t("error_prefix") + (data.detail || data.error);
     renderStory(message);
     renderRoll(null);
     // The failed turn was never saved server-side, so the options/character
@@ -973,7 +1011,7 @@ function handleActionResult(data) {
   renderChanges(data.changes);
   applyState(data);
   if (data.defeated) {
-    document.getElementById("story").textContent += "\n\n💀 Персонаж втратив свідомість.";
+    document.getElementById("story").textContent += "\n\n" + t("defeated_miniapp");
   }
 }
 
@@ -1038,12 +1076,13 @@ function onboardingHTML(html) {
 }
 
 function showWizardError(data) {
-  const t = wizard.uiStrings || {};
-  const template = t.gemini_error || "Error: {error}";
+  const w = wizard.uiStrings || {};
+  const template = w.gemini_error || "Error: {error}";
   const msg = template.replace("{error}", data.detail || data.error || "unknown");
+  const retryLabel = w.retry_button || "🔄 Retry";
   onboardingHTML(
     `<div class="wiz-loading">${escapeHtml(msg)}</div>` +
-    `<button class="btn" onclick="startOnboarding()">🔄 Retry</button>`
+    `<button class="btn" onclick="startOnboarding()">${escapeHtml(retryLabel)}</button>`
   );
 }
 
@@ -1222,6 +1261,8 @@ async function startAdventure() {
     age: wizard.age,
   });
   if (data.error) { showWizardError(data); return; }
+  gameUi = wizard.uiStrings;
+  localizeStaticUI();
   document.getElementById("onboardingView").classList.remove("active");
   document.getElementById("storyView").classList.add("active");
   showTabs(true);
