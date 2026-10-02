@@ -2,19 +2,6 @@
 
 Each Telegram user gets their own row with a JSON blob holding:
 - a running story summary (kept short so the prompt doesn't grow forever)
-- the last few raw exchanges (for near-term continuity)
-- basic character info (name, class, hp, etc.)
-"""
-
-import json
-import sqlite3
-from dataclasses import dataclass, field
-from pathlib import Path
-
-"""Per-user game state storage backed by SQLite.
-
-Each Telegram user gets their own row with a JSON blob holding:
-- a running story summary (kept short so the prompt doesn't grow forever)
 - the last few raw exchanges (for near-term continuity, sent to Gemini)
 - a longer full_log kept purely for the player to scroll back through
 - basic character info (name, class, hp, etc.)
