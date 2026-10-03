@@ -524,6 +524,12 @@
     <div class="side-menu-section" id="roomMenuSection" style="display:none;">
       <button class="btn secondary" id="leaveRoomBtn" onclick="leaveRoom()">🚪 Покинути кімнату</button>
     </div>
+
+    <div class="side-menu-section" id="multiplayerMenuSection">
+      <div class="section-title" id="multiplayerTitle">Мультиплеєр</div>
+      <button class="btn secondary" id="createRoomMenuBtn" onclick="openMultiplayerFromMenu('host')">➕ Створити кімнату</button>
+      <button class="btn secondary" id="joinRoomMenuBtn" onclick="openMultiplayerFromMenu('join')">🔑 Приєднатися за кодом</button>
+    </div>
   </div>
 
   <div id="onboardingView" class="view active"></div>
@@ -576,6 +582,7 @@ let roomId = null;
 let myTurn = true;
 let roomPollTimer = null;
 let lastActiveUserId = null;
+let currentLanguage = null;
 
 // Localized UI strings for the game screen (tabs, menu, section titles,
 // errors) — fetched once via /api/ui as soon as we know the game's
@@ -608,6 +615,9 @@ function localizeStaticUI() {
   document.getElementById("diceBtn").textContent = "🎲 " + t("roll_button_label");
   document.getElementById("freeText").placeholder = t("free_text_placeholder");
   document.getElementById("leaveRoomBtn").textContent = t("leave_room_button");
+  document.getElementById("multiplayerTitle").textContent = t("multiplayer_menu_title");
+  document.getElementById("createRoomMenuBtn").textContent = "➕ " + t("mode_create_room").replace(/^[^\s]+\s*/, "");
+  document.getElementById("joinRoomMenuBtn").textContent = "🔑 " + t("mode_join_room").replace(/^[^\s]+\s*/, "");
 }
 
 let lastCharacter = null;
@@ -759,7 +769,46 @@ function openMenu() {
   document.getElementById("sideMenu").classList.add("open");
   document.getElementById("themeToggle").checked = useCategoryTheme;
   document.getElementById("roomMenuSection").style.display = roomMode ? "block" : "none";
+  document.getElementById("multiplayerMenuSection").style.display = roomMode ? "none" : "block";
   renderMenuLog();
+}
+
+// Jump into room creation/joining from the side menu, without discarding
+// whatever game is currently loaded (solo play keeps its own save; a room
+// lives in separate storage, so this is safe to back out of).
+let cameFromActiveGame = false;
+
+async function openMultiplayerFromMenu(mode) {
+  closeMenu();
+  cameFromActiveGame = true;
+  wizard = {
+    language: currentLanguage || "uk",
+    uiStrings: gameUi || {},
+    category: null, worldDescription: null, characterDescription: null,
+    gender: null, age: null, currentPreview: null,
+    multiplayer: null, roomId: null,
+  };
+  showTabs(false);
+  document.getElementById("partyPanel").style.display = "none";
+  document.getElementById("storyView").classList.remove("active");
+  document.getElementById("characterView").classList.remove("active");
+  document.getElementById("onboardingView").classList.add("active");
+  if (mode === "host") {
+    await chooseCreateRoomMode();
+  } else {
+    renderJoinRoomStep();
+  }
+}
+
+function cancelButtonHtml() {
+  if (!cameFromActiveGame) return "";
+  return `<button class="btn secondary" onclick="cancelMultiplayerSetup()">← ${escapeHtml(t("tab_story"))}</button>`;
+}
+
+function cancelMultiplayerSetup() {
+  cameFromActiveGame = false;
+  document.getElementById("onboardingView").classList.remove("active");
+  loadState();
 }
 
 async function leaveRoom() {
@@ -1019,6 +1068,7 @@ async function applyState(data) {
   lastCharacter = data.character || null;
   if (data.log) lastLog = data.log;
   if (data.room_id) roomId = data.room_id;
+  if (data.language) currentLanguage = data.language;
   if (data.language && !gameUi) {
     gameUi = await fetch(`/api/ui?lang=${data.language}`).then(r => r.json());
     localizeStaticUI();
@@ -1204,6 +1254,7 @@ function showWizardError(data) {
 }
 
 function startOnboarding() {
+  cameFromActiveGame = false;
   wizard = {
     language: null, uiStrings: null, category: null, worldDescription: null,
     characterDescription: null, gender: null, age: null, currentPreview: null,
@@ -1266,6 +1317,7 @@ function renderJoinRoomStep() {
     <div class="wiz-title">${escapeHtml(t.room_code_prompt)}</div>
     <input class="wiz-input" id="roomCodeInput" placeholder="${escapeHtml(t.room_code_placeholder)}" style="text-transform:uppercase">
     <button class="btn" onclick="submitRoomCode()">${escapeHtml(t.continue_button)}</button>
+    ${cancelButtonHtml()}
   `);
 }
 
@@ -1282,6 +1334,7 @@ function renderCategoryStep(categories) {
   onboardingHTML(`
     <div class="wiz-title">${escapeHtml(t.choose_category)}</div>
     <div id="catButtons"></div>
+    ${cancelButtonHtml()}
   `);
   document.getElementById("catButtons").innerHTML = categories
     .map(c => `<button class="btn" onclick="selectCategory('${c.key}')">${escapeHtml(c.label)}</button>`)
@@ -1300,6 +1353,7 @@ function renderWorldStep() {
     <textarea class="wiz-textarea" id="worldInput"></textarea>
     <button class="btn" onclick="submitWorldText()">${escapeHtml(t.continue_button)}</button>
     <button class="btn secondary" onclick="requestWorldPreview()">${escapeHtml(t.world_random_button)}</button>
+    ${cancelButtonHtml()}
   `);
 }
 
@@ -1334,6 +1388,7 @@ function renderCharacterMethodStep() {
     <div class="wiz-title">${escapeHtml(t.character_method_prompt)}</div>
     <button class="btn" onclick="renderCharacterManualStep()">${escapeHtml(t.character_manual_button)}</button>
     <button class="btn secondary" onclick="renderGenderStep()">${escapeHtml(t.character_random_button)}</button>
+    ${cancelButtonHtml()}
   `);
 }
 
@@ -1441,6 +1496,8 @@ async function startAdventure() {
 
   if (data.error) { showWizardError(data); return; }
   gameUi = wizard.uiStrings;
+  currentLanguage = wizard.language;
+  cameFromActiveGame = false;
   localizeStaticUI();
   roomMode = wizard.multiplayer === "host" || wizard.multiplayer === "join";
   roomId = data.room_id || wizard.roomId || null;

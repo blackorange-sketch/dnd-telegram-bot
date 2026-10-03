@@ -87,6 +87,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "room_code_label": "Код кімнати",
         "waiting_for_turn": "⏳ Зараз хід іншого гравця...",
         "leave_room_button": "🚪 Покинути кімнату",
+        "multiplayer_menu_title": "Мультиплеєр",
     },
     "en": {
         "start": (
@@ -172,6 +173,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "room_code_label": "Room code",
         "waiting_for_turn": "⏳ Waiting for the other player's turn...",
         "leave_room_button": "🚪 Leave room",
+        "multiplayer_menu_title": "Multiplayer",
     },
     "ru": {
         "start": (
@@ -257,6 +259,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "room_code_label": "Код комнаты",
         "waiting_for_turn": "⏳ Сейчас ход другого игрока...",
         "leave_room_button": "🚪 Покинуть комнату",
+        "multiplayer_menu_title": "Мультиплеер",
     },
     "pl": {
         "start": (
@@ -342,6 +345,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "room_code_label": "Kod pokoju",
         "waiting_for_turn": "⏳ Teraz tura innego gracza...",
         "leave_room_button": "🚪 Opuść pokój",
+        "multiplayer_menu_title": "Multiplayer",
     },
 }
 
