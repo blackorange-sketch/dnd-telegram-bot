@@ -55,8 +55,16 @@ def _last_dm_text(game) -> str:
 
 @routes.get("/")
 @routes.get("/miniapp")
-async def serve_miniapp(request: web.Request) -> web.FileResponse:
-    return web.FileResponse(STATIC_DIR / "index.html")
+async def serve_miniapp(request: web.Request) -> web.Response:
+    # Telegram's in-app WebView caches this page aggressively across
+    # deploys — force a revalidation every time so a redeploy is actually
+    # visible without the player having to clear app data.
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    return web.Response(
+        text=html,
+        content_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 @routes.post("/api/state")

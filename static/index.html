@@ -520,11 +520,22 @@
         <div class="menu-log-list" id="menuLogList"></div>
       </details>
     </div>
+
+    <div class="side-menu-section" id="roomMenuSection" style="display:none;">
+      <button class="btn secondary" id="leaveRoomBtn" onclick="leaveRoom()">🚪 Покинути кімнату</button>
+    </div>
+
+    <div class="side-menu-section" id="multiplayerMenuSection">
+      <div class="section-title" id="multiplayerTitle">Мультиплеєр</div>
+      <button class="btn secondary" id="createRoomMenuBtn" onclick="openMultiplayerFromMenu('host')">➕ Створити кімнату</button>
+      <button class="btn secondary" id="joinRoomMenuBtn" onclick="openMultiplayerFromMenu('join')">🔑 Приєднатися за кодом</button>
+    </div>
   </div>
 
   <div id="onboardingView" class="view active"></div>
 
   <div id="storyView" class="view">
+    <div id="partyPanel" style="display:none;"></div>
     <div id="status"></div>
     <div class="dice-anim" id="diceAnim">
       <div class="die-face" id="dieFace">
@@ -563,6 +574,15 @@ const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 const initData = tg.initData;
+const currentUserId = (tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user.id : null;
+
+// --- Multiplayer (turn-based rooms) ---
+let roomMode = false;
+let roomId = null;
+let myTurn = true;
+let roomPollTimer = null;
+let lastActiveUserId = null;
+let currentLanguage = null;
 
 // Localized UI strings for the game screen (tabs, menu, section titles,
 // errors) — fetched once via /api/ui as soon as we know the game's
@@ -594,6 +614,10 @@ function localizeStaticUI() {
   document.getElementById("invTitle").textContent = t("inventory_title");
   document.getElementById("diceBtn").textContent = "🎲 " + t("roll_button_label");
   document.getElementById("freeText").placeholder = t("free_text_placeholder");
+  document.getElementById("leaveRoomBtn").textContent = t("leave_room_button");
+  document.getElementById("multiplayerTitle").textContent = t("multiplayer_menu_title");
+  document.getElementById("createRoomMenuBtn").textContent = "➕ " + t("mode_create_room").replace(/^[^\s]+\s*/, "");
+  document.getElementById("joinRoomMenuBtn").textContent = "🔑 " + t("mode_join_room").replace(/^[^\s]+\s*/, "");
 }
 
 let lastCharacter = null;
@@ -744,7 +768,108 @@ function openMenu() {
   document.getElementById("menuOverlay").classList.add("visible");
   document.getElementById("sideMenu").classList.add("open");
   document.getElementById("themeToggle").checked = useCategoryTheme;
+  document.getElementById("roomMenuSection").style.display = roomMode ? "block" : "none";
+  document.getElementById("multiplayerMenuSection").style.display = roomMode ? "none" : "block";
   renderMenuLog();
+}
+
+// Jump into room creation/joining from the side menu, without discarding
+// whatever game is currently loaded (solo play keeps its own save; a room
+// lives in separate storage, so this is safe to back out of).
+let cameFromActiveGame = false;
+
+async function openMultiplayerFromMenu(mode) {
+  closeMenu();
+  cameFromActiveGame = true;
+  wizard = {
+    language: currentLanguage || "uk",
+    uiStrings: gameUi || {},
+    category: null, worldDescription: null, characterDescription: null,
+    gender: null, age: null, currentPreview: null,
+    multiplayer: null, roomId: null,
+  };
+  showTabs(false);
+  document.getElementById("partyPanel").style.display = "none";
+  document.getElementById("storyView").classList.remove("active");
+  document.getElementById("characterView").classList.remove("active");
+  document.getElementById("onboardingView").classList.add("active");
+  if (mode === "host") {
+    await chooseCreateRoomMode();
+  } else {
+    renderJoinRoomStep();
+  }
+}
+
+function cancelButtonHtml() {
+  if (!cameFromActiveGame) return "";
+  return `<button class="btn secondary" onclick="cancelMultiplayerSetup()">← ${escapeHtml(t("tab_story"))}</button>`;
+}
+
+function cancelMultiplayerSetup() {
+  cameFromActiveGame = false;
+  document.getElementById("onboardingView").classList.remove("active");
+  loadState();
+}
+
+async function leaveRoom() {
+  closeMenu();
+  stopRoomPolling();
+  await api("/api/room/leave", {});
+  roomMode = false;
+  roomId = null;
+  startOnboarding();
+}
+
+function renderParty(party, activeUserId) {
+  const el = document.getElementById("partyPanel");
+  if (!roomMode || !party || !party.length) {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "block";
+  const rows = party.map(p => {
+    const mark = p.user_id === activeUserId ? "👉 " : "";
+    const hp = (p.hp != null && p.max_hp != null) ? ` ❤️${p.hp}/${p.max_hp}` : "";
+    return `<div>${mark}${escapeHtml(p.display_name)}${hp}</div>`;
+  }).join("");
+  const codeLine = roomId
+    ? `<div style="margin-top:6px;color:var(--hint);font-size:13px;">${t("room_code_label")}: <b>${escapeHtml(roomId)}</b></div>`
+    : "";
+  el.innerHTML = `<div class="preview-card">${rows}${codeLine}</div>`;
+}
+
+function setActionControlsEnabled(enabled) {
+  myTurn = enabled;
+  document.getElementById("diceBtn").style.display = enabled ? "" : "none";
+  document.getElementById("textRow").style.display = enabled ? "" : "none";
+  if (!enabled) {
+    document.getElementById("options").innerHTML = `<div class="empty-note">${t("waiting_for_turn")}</div>`;
+  }
+}
+
+function actionPath() {
+  return roomMode ? "/api/room/action" : "/api/action";
+}
+
+function startRoomPolling() {
+  stopRoomPolling();
+  roomPollTimer = setInterval(async () => {
+    if (!roomMode) return;
+    const data = await api("/api/room/state", {});
+    if (data.error) return;
+    const changed = (data.log && data.log.length !== lastLog.length) || data.active_user_id !== lastActiveUserId;
+    lastActiveUserId = data.active_user_id;
+    if (changed) {
+      await applyState(data);
+    } else {
+      renderParty(data.party, data.active_user_id);
+    }
+  }, 4000);
+}
+
+function stopRoomPolling() {
+  if (roomPollTimer) clearInterval(roomPollTimer);
+  roomPollTimer = null;
 }
 
 function closeMenu() {
@@ -942,6 +1067,8 @@ function renderMenuLog() {
 async function applyState(data) {
   lastCharacter = data.character || null;
   if (data.log) lastLog = data.log;
+  if (data.room_id) roomId = data.room_id;
+  if (data.language) currentLanguage = data.language;
   if (data.language && !gameUi) {
     gameUi = await fetch(`/api/ui?lang=${data.language}`).then(r => r.json());
     localizeStaticUI();
@@ -949,7 +1076,13 @@ async function applyState(data) {
   applyTheme(lastCharacter && lastCharacter.category);
   renderStatus(data.character);
   renderStory(data.text);
-  renderOptions(data.options);
+  renderParty(data.party, data.active_user_id);
+  lastActiveUserId = data.active_user_id;
+
+  const canAct = !roomMode || data.active_user_id == null || data.active_user_id === currentUserId;
+  setActionControlsEnabled(canAct);
+  if (canAct) renderOptions(data.options);
+
   if (document.getElementById("characterView").classList.contains("active")) {
     renderCharacterView();
   }
@@ -971,6 +1104,24 @@ function setLoading() {
 }
 
 async function loadState() {
+  const roomData = await api("/api/room/state", {});
+  if (!roomData.error) {
+    roomMode = true;
+    showTabs(true);
+    document.getElementById("onboardingView").classList.remove("active");
+    document.getElementById("storyView").classList.add("active");
+    await applyState(roomData);
+    startRoomPolling();
+    return;
+  }
+  if (roomData.error === "unauthorized") {
+    showTabs(false);
+    document.getElementById("onboardingView").classList.add("active");
+    document.getElementById("onboardingView").innerHTML =
+      `<div class="wiz-loading">${t("unauthorized_note")}</div>`;
+    return;
+  }
+
   const data = await api("/api/state", {});
   if (data.error === "no_active_game") {
     startOnboarding();
@@ -983,6 +1134,7 @@ async function loadState() {
       `<div class="wiz-loading">${t("unauthorized_note")}</div>`;
     return;
   }
+  roomMode = false;
   showTabs(true);
   document.getElementById("onboardingView").classList.remove("active");
   document.getElementById("storyView").classList.add("active");
@@ -991,6 +1143,15 @@ async function loadState() {
 
 function handleActionResult(data) {
   if (data.error) {
+    if (data.error === "not_your_turn") {
+      // Someone else's turn started (or finished) while we were mid-action —
+      // just resync from the server instead of showing a scary error.
+      renderRoll(null);
+      lastActiveUserId = data.active_user_id;
+      renderParty(data.party, data.active_user_id);
+      setActionControlsEnabled(data.active_user_id === currentUserId);
+      return;
+    }
     const message = data.error === "content_blocked"
       ? t("content_blocked")
       : t("error_prefix") + (data.detail || data.error);
@@ -1004,6 +1165,7 @@ function handleActionResult(data) {
       renderStatus(data.character);
       applyTheme(lastCharacter && lastCharacter.category);
     }
+    if (data.party) renderParty(data.party, data.active_user_id);
     if (data.options) renderOptions(data.options);
     return;
   }
@@ -1016,11 +1178,12 @@ function handleActionResult(data) {
 }
 
 async function sendChoice(index, requiresRoll) {
+  if (roomMode && !myTurn) return;
   setBusy(true);
   try {
     if (requiresRoll) startDiceAnimation(20);
     setLoading();
-    const data = await api("/api/action", { type: "choice", index });
+    const data = await api(actionPath(), { type: "choice", index });
     if (requiresRoll) await stopDiceAnimation(data.roll ? data.roll.value : null);
     handleActionResult(data);
   } finally {
@@ -1029,11 +1192,12 @@ async function sendChoice(index, requiresRoll) {
 }
 
 async function sendManualRoll() {
+  if (roomMode && !myTurn) return;
   setBusy(true);
   try {
     startDiceAnimation(20);
     setLoading();
-    const data = await api("/api/action", { type: "roll", sides: 20 });
+    const data = await api(actionPath(), { type: "roll", sides: 20 });
     await stopDiceAnimation(data.roll ? data.roll.value : null);
     handleActionResult(data);
   } finally {
@@ -1042,6 +1206,7 @@ async function sendManualRoll() {
 }
 
 async function sendFreeText() {
+  if (roomMode && !myTurn) return;
   const input = document.getElementById("freeText");
   const text = input.value.trim();
   if (!text) return;
@@ -1049,7 +1214,7 @@ async function sendFreeText() {
   setBusy(true);
   try {
     setLoading();
-    const data = await api("/api/action", { type: "text", text });
+    const data = await api(actionPath(), { type: "text", text });
     handleActionResult(data);
   } finally {
     setBusy(false);
@@ -1069,6 +1234,8 @@ let wizard = {
   gender: null,
   age: null,
   currentPreview: null,
+  multiplayer: null, // null = solo, "host" = creating a room, "join" = joining one
+  roomId: null,
 };
 
 function onboardingHTML(html) {
@@ -1087,9 +1254,16 @@ function showWizardError(data) {
 }
 
 function startOnboarding() {
+  cameFromActiveGame = false;
+  wizard = {
+    language: null, uiStrings: null, category: null, worldDescription: null,
+    characterDescription: null, gender: null, age: null, currentPreview: null,
+    multiplayer: null, roomId: null,
+  };
   applyTheme(null);
   showTabs(false);
   closeMenu();
+  document.getElementById("partyPanel").style.display = "none";
   document.getElementById("storyView").classList.remove("active");
   document.getElementById("characterView").classList.remove("active");
   document.getElementById("onboardingView").classList.add("active");
@@ -1111,12 +1285,48 @@ function renderLanguageStep() {
 async function selectLanguage(key) {
   wizard.language = key;
   onboardingHTML(`<div class="wiz-loading">...</div>`);
-  const [uiStrings, categories] = await Promise.all([
-    fetch(`/api/ui?lang=${key}`).then(r => r.json()),
-    fetch(`/api/categories?lang=${key}`).then(r => r.json()),
-  ]);
-  wizard.uiStrings = uiStrings;
+  wizard.uiStrings = await fetch(`/api/ui?lang=${key}`).then(r => r.json());
+  renderModeStep();
+}
+
+function renderModeStep() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.mode_prompt)}</div>
+    <button class="btn" onclick="chooseSoloMode()">${escapeHtml(t.mode_solo)}</button>
+    <button class="btn" onclick="chooseCreateRoomMode()">${escapeHtml(t.mode_create_room)}</button>
+    <button class="btn secondary" onclick="renderJoinRoomStep()">${escapeHtml(t.mode_join_room)}</button>
+  `);
+}
+
+async function chooseSoloMode() {
+  wizard.multiplayer = null;
+  const categories = await fetch(`/api/categories?lang=${wizard.language}`).then(r => r.json());
   renderCategoryStep(categories);
+}
+
+async function chooseCreateRoomMode() {
+  wizard.multiplayer = "host";
+  const categories = await fetch(`/api/categories?lang=${wizard.language}`).then(r => r.json());
+  renderCategoryStep(categories);
+}
+
+function renderJoinRoomStep() {
+  const t = wizard.uiStrings;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t.room_code_prompt)}</div>
+    <input class="wiz-input" id="roomCodeInput" placeholder="${escapeHtml(t.room_code_placeholder)}" style="text-transform:uppercase">
+    <button class="btn" onclick="submitRoomCode()">${escapeHtml(t.continue_button)}</button>
+    ${cancelButtonHtml()}
+  `);
+}
+
+function submitRoomCode() {
+  const code = document.getElementById("roomCodeInput").value.trim().toUpperCase();
+  if (!code) return;
+  wizard.multiplayer = "join";
+  wizard.roomId = code;
+  renderCharacterMethodStep();
 }
 
 function renderCategoryStep(categories) {
@@ -1124,6 +1334,7 @@ function renderCategoryStep(categories) {
   onboardingHTML(`
     <div class="wiz-title">${escapeHtml(t.choose_category)}</div>
     <div id="catButtons"></div>
+    ${cancelButtonHtml()}
   `);
   document.getElementById("catButtons").innerHTML = categories
     .map(c => `<button class="btn" onclick="selectCategory('${c.key}')">${escapeHtml(c.label)}</button>`)
@@ -1142,6 +1353,7 @@ function renderWorldStep() {
     <textarea class="wiz-textarea" id="worldInput"></textarea>
     <button class="btn" onclick="submitWorldText()">${escapeHtml(t.continue_button)}</button>
     <button class="btn secondary" onclick="requestWorldPreview()">${escapeHtml(t.world_random_button)}</button>
+    ${cancelButtonHtml()}
   `);
 }
 
@@ -1176,6 +1388,7 @@ function renderCharacterMethodStep() {
     <div class="wiz-title">${escapeHtml(t.character_method_prompt)}</div>
     <button class="btn" onclick="renderCharacterManualStep()">${escapeHtml(t.character_manual_button)}</button>
     <button class="btn secondary" onclick="renderGenderStep()">${escapeHtml(t.character_random_button)}</button>
+    ${cancelButtonHtml()}
   `);
 }
 
@@ -1252,21 +1465,47 @@ function acceptCharacterPreview() {
 async function startAdventure() {
   const t = wizard.uiStrings;
   onboardingHTML(`<div class="wiz-loading">${escapeHtml(t.creating)}</div>`);
-  const data = await api("/api/create", {
-    language: wizard.language,
-    category: wizard.category,
-    world_description: wizard.worldDescription,
-    character_description: wizard.characterDescription,
-    gender: wizard.gender,
-    age: wizard.age,
-  });
+
+  let data;
+  if (wizard.multiplayer === "host") {
+    data = await api("/api/room/create", {
+      language: wizard.language,
+      category: wizard.category,
+      world_description: wizard.worldDescription,
+      character_description: wizard.characterDescription,
+      gender: wizard.gender,
+      age: wizard.age,
+    });
+  } else if (wizard.multiplayer === "join") {
+    data = await api("/api/room/join", {
+      room_id: wizard.roomId,
+      character_description: wizard.characterDescription,
+      gender: wizard.gender,
+      age: wizard.age,
+    });
+  } else {
+    data = await api("/api/create", {
+      language: wizard.language,
+      category: wizard.category,
+      world_description: wizard.worldDescription,
+      character_description: wizard.characterDescription,
+      gender: wizard.gender,
+      age: wizard.age,
+    });
+  }
+
   if (data.error) { showWizardError(data); return; }
   gameUi = wizard.uiStrings;
+  currentLanguage = wizard.language;
+  cameFromActiveGame = false;
   localizeStaticUI();
+  roomMode = wizard.multiplayer === "host" || wizard.multiplayer === "join";
+  roomId = data.room_id || wizard.roomId || null;
   document.getElementById("onboardingView").classList.remove("active");
   document.getElementById("storyView").classList.add("active");
   showTabs(true);
-  applyState(data);
+  await applyState(data);
+  if (roomMode) startRoomPolling();
 }
 
 initDiceScene();
