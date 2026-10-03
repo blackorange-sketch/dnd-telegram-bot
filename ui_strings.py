@@ -78,6 +78,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "open_miniapp_button": "🎮 Відкрити пригоду",
         "play_intro": "Тисни кнопку, щоб відкрити гру як застосунок:",
         "continue_button": "➡️ Далі",
+        "mode_prompt": "Як граємо?",
+        "mode_solo": "🧍 Одиночна гра",
+        "mode_create_room": "➕ Створити кімнату (з другом)",
+        "mode_join_room": "🔑 Приєднатися за кодом",
+        "room_code_prompt": "Введи код кімнати, який тобі надіслав господар гри:",
+        "room_code_placeholder": "Напр. AB12CD",
+        "room_code_label": "Код кімнати",
+        "waiting_for_turn": "⏳ Зараз хід іншого гравця...",
+        "leave_room_button": "🚪 Покинути кімнату",
     },
     "en": {
         "start": (
@@ -154,6 +163,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "open_miniapp_button": "🎮 Open adventure",
         "play_intro": "Tap the button to open the game as an app:",
         "continue_button": "➡️ Continue",
+        "mode_prompt": "How do you want to play?",
+        "mode_solo": "🧍 Solo",
+        "mode_create_room": "➕ Create a room (with a friend)",
+        "mode_join_room": "🔑 Join with a code",
+        "room_code_prompt": "Enter the room code your host sent you:",
+        "room_code_placeholder": "e.g. AB12CD",
+        "room_code_label": "Room code",
+        "waiting_for_turn": "⏳ Waiting for the other player's turn...",
+        "leave_room_button": "🚪 Leave room",
     },
     "ru": {
         "start": (
@@ -230,6 +248,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "open_miniapp_button": "🎮 Открыть приключение",
         "play_intro": "Нажми кнопку, чтобы открыть игру как приложение:",
         "continue_button": "➡️ Далее",
+        "mode_prompt": "Как играем?",
+        "mode_solo": "🧍 Одиночная игра",
+        "mode_create_room": "➕ Создать комнату (с другом)",
+        "mode_join_room": "🔑 Присоединиться по коду",
+        "room_code_prompt": "Введи код комнаты, который тебе прислал хозяин игры:",
+        "room_code_placeholder": "Напр. AB12CD",
+        "room_code_label": "Код комнаты",
+        "waiting_for_turn": "⏳ Сейчас ход другого игрока...",
+        "leave_room_button": "🚪 Покинуть комнату",
     },
     "pl": {
         "start": (
@@ -306,6 +333,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "open_miniapp_button": "🎮 Otwórz przygodę",
         "play_intro": "Kliknij przycisk, aby otworzyć grę jako aplikację:",
         "continue_button": "➡️ Dalej",
+        "mode_prompt": "Jak grasz?",
+        "mode_solo": "🧍 Gra solo",
+        "mode_create_room": "➕ Stwórz pokój (ze znajomym)",
+        "mode_join_room": "🔑 Dołącz kodem",
+        "room_code_prompt": "Wpisz kod pokoju, który przesłał ci gospodarz:",
+        "room_code_placeholder": "np. AB12CD",
+        "room_code_label": "Kod pokoju",
+        "waiting_for_turn": "⏳ Teraz tura innego gracza...",
+        "leave_room_button": "🚪 Opuść pokój",
     },
 }
 
