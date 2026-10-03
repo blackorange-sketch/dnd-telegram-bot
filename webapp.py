@@ -12,6 +12,8 @@ from aiohttp import web
 import core
 import gemini_client
 import languages as lang
+import room_core
+import rooms
 import ui_strings as ui
 import world_categories as wc
 from game_state import load_state
@@ -25,12 +27,23 @@ STATIC_DIR = Path(__file__).parent / "static"
 routes = web.RouteTableDef()
 
 
-def _authed_user_id(body: dict) -> int | None:
+def _authed_user(body: dict) -> dict | None:
     init_data = body.get("initData", "")
-    user = verify_init_data(init_data, BOT_TOKEN)
+    return verify_init_data(init_data, BOT_TOKEN)
+
+
+def _authed_user_id(body: dict) -> int | None:
+    user = _authed_user(body)
     if not user:
         return None
     return user.get("id")
+
+
+def _display_name(user: dict) -> str:
+    name = user.get("first_name") or user.get("username")
+    if not name:
+        return f"Player {user.get('id')}"
+    return name
 
 
 def _last_dm_text(game) -> str:
@@ -252,6 +265,239 @@ async def api_action(request: web.Request) -> web.Response:
     if roll_info:
         result["roll"] = roll_info
     return web.json_response(result)
+
+
+# ---------------------------------------------------------------------------
+# Multiplayer (turn-based rooms)
+# ---------------------------------------------------------------------------
+
+def _room_render(room: rooms.RoomState, user_id: int) -> dict:
+    """Common shape for /api/room/state and the join/leave replies."""
+    seat = room.seats.get(user_id)
+    return {
+        "room_id": room.room_id,
+        "host_user_id": room.host_user_id,
+        "language": room.language,
+        "text": _last_dm_text(room),
+        "options": room.pending_options,
+        "character": seat.character if seat else None,
+        "log": room.full_log,
+        "active_user_id": room.current_turn_user_id(),
+        "is_turn": room.is_turn(user_id),
+        "party": room_core.party_status(room),
+    }
+
+
+@routes.post("/api/room/create")
+async def api_room_create(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_request"}, status=400)
+
+    user = _authed_user(body)
+    if user is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    user_id = user["id"]
+
+    if rooms.room_id_for_user(user_id):
+        return web.json_response({"error": "already_in_room"}, status=409)
+
+    lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
+    category_key = body.get("category", wc.all_keys()[0])
+
+    room = rooms.create_room(
+        host_user_id=user_id,
+        host_display_name=_display_name(user),
+        language=lang_key,
+        category=category_key,
+        world_description=body.get("world_description"),
+    )
+
+    try:
+        result = await room_core.create_room_adventure(
+            room,
+            character_description=body.get("character_description"),
+            gender=body.get("gender"),
+            age=body.get("age"),
+        )
+    except Exception as e:
+        logger.exception("Gemini error creating room adventure")
+        rooms.delete_room(room.room_id)
+        return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
+
+    result["room_id"] = room.room_id
+    result["host_user_id"] = room.host_user_id
+    result["is_turn"] = room.is_turn(user_id)
+    return web.json_response(result)
+
+
+@routes.post("/api/room/join")
+async def api_room_join(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_request"}, status=400)
+
+    user = _authed_user(body)
+    if user is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    user_id = user["id"]
+
+    existing_room_id = rooms.room_id_for_user(user_id)
+    room_code = str(body.get("room_id", "")).strip().upper()
+    if not room_code:
+        return web.json_response({"error": "missing_room_id"}, status=400)
+
+    if existing_room_id == room_code:
+        # Rejoining a room they're already seated in (e.g. reopened the Mini
+        # App) — just return the current state, don't regenerate a character.
+        room = rooms.load_room(room_code)
+        if room is None:
+            return web.json_response({"error": "room_not_found"}, status=404)
+        return web.json_response(_room_render(room, user_id))
+
+    room = rooms.join_room(room_code, user_id, _display_name(user))
+    if room is None:
+        return web.json_response({"error": "room_not_found"}, status=404)
+
+    seat = room.seats[user_id]
+    if not seat.character:
+        try:
+            await room_core.create_joining_character(
+                room,
+                seat,
+                character_description=body.get("character_description"),
+                gender=body.get("gender"),
+                age=body.get("age"),
+            )
+        except Exception as e:
+            logger.exception("Gemini error creating joining character")
+            return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
+
+    return web.json_response(_room_render(room, user_id))
+
+
+@routes.post("/api/room/state")
+async def api_room_state(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_request"}, status=400)
+
+    user_id = _authed_user_id(body)
+    if user_id is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    room = rooms.load_room_for_user(user_id)
+    if room is None:
+        return web.json_response({"error": "no_active_room"}, status=404)
+
+    return web.json_response(_room_render(room, user_id))
+
+
+@routes.post("/api/room/action")
+async def api_room_action(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_request"}, status=400)
+
+    user_id = _authed_user_id(body)
+    if user_id is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    room = rooms.load_room_for_user(user_id)
+    if room is None:
+        return web.json_response({"error": "no_active_room"}, status=404)
+
+    if not room.is_turn(user_id):
+        return web.json_response({
+            "error": "not_your_turn",
+            "active_user_id": room.current_turn_user_id(),
+            "party": room_core.party_status(room),
+        }, status=409)
+
+    seat = room.seats[user_id]
+    action_type = body.get("type")
+    roll_info = None
+
+    if action_type == "choice":
+        try:
+            idx = int(body.get("index", 0))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "invalid_index"}, status=400)
+
+        option = None
+        if room.pending_options and 1 <= idx <= len(room.pending_options):
+            option = room.pending_options[idx - 1]
+
+        if option is None:
+            player_input = f"Choosing option {idx}"
+        elif option.get("requires_roll"):
+            roll_info = core.compute_roll(seat, attribute=option.get("attribute"))
+            player_input = f"{option['text']} — {core.roll_action_text(roll_info)}"
+        else:
+            player_input = option["text"]
+
+    elif action_type == "roll":
+        try:
+            sides = int(body.get("sides", 20))
+        except (TypeError, ValueError):
+            sides = 20
+        roll_info = core.compute_roll(seat, sides)
+        player_input = f"I roll a die — {core.roll_action_text(roll_info)}"
+
+    elif action_type == "text":
+        player_input = str(body.get("text", "")).strip()
+        if not player_input:
+            return web.json_response({"error": "empty_text"}, status=400)
+
+    else:
+        return web.json_response({"error": "invalid_type"}, status=400)
+
+    try:
+        result = await room_core.perform_room_turn(room, user_id, player_input)
+    except room_core.NotYourTurnError:
+        return web.json_response({
+            "error": "not_your_turn",
+            "active_user_id": room.current_turn_user_id(),
+            "party": room_core.party_status(room),
+        }, status=409)
+    except Exception as e:
+        logger.exception("Gemini error in room action")
+        error_key = "content_blocked" if isinstance(e, gemini_client.ContentBlockedError) else "gemini_error"
+        return web.json_response({
+            "error": error_key,
+            "detail": str(e),
+            "options": room.pending_options,
+            "character": seat.character,
+            "active_user_id": room.current_turn_user_id(),
+            "party": room_core.party_status(room),
+        }, status=502)
+
+    if roll_info:
+        result["roll"] = roll_info
+    return web.json_response(result)
+
+
+@routes.post("/api/room/leave")
+async def api_room_leave(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_request"}, status=400)
+
+    user_id = _authed_user_id(body)
+    if user_id is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    room_id = rooms.room_id_for_user(user_id)
+    if room_id is None:
+        return web.json_response({"error": "no_active_room"}, status=404)
+
+    rooms.leave_room(room_id, user_id)
+    return web.json_response({"ok": True})
 
 
 def create_app() -> web.Application:
