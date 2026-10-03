@@ -241,45 +241,50 @@ def load_room_for_user(user_id: int) -> RoomState | None:
 
 
 def join_room(room_id: str, user_id: int, display_name: str) -> RoomState | None:
-    """Add a user as a new seat in an existing room and put them last in
-    the turn order. Returns the updated room, or None if the room doesn't
-    exist. A user already seated elsewhere is moved (their old seat is not
-    deleted automatically — the caller should check room_id_for_user first
-    if that matters)."""
+    """Add a user to an existing room's turn order, giving them a fresh seat
+    only if they don't already have one — a player rejoining after
+    leave_room() keeps their existing character (hp/money/inventory) instead
+    of starting over. Returns the updated room, or None if it doesn't
+    exist."""
     room = load_room(room_id)
     if room is None:
         return None
     if user_id not in room.seats:
         room.seats[user_id] = Seat(user_id=user_id, display_name=display_name)
+    else:
+        room.seats[user_id].display_name = display_name
+    if user_id not in room.turn_order:
         room.turn_order.append(user_id)
-        save_room(room)
+    save_room(room)
     _set_member(user_id, room_id)
     return room
 
 
 def leave_room(room_id: str, user_id: int) -> RoomState | None:
-    """Remove a seat from a room. If the host leaves, the next player in
-    turn order (if any) becomes the new host. Returns the updated room, or
-    None if the room no longer exists (last player left) or didn't exist."""
+    """Take a player out of the active turn order so play isn't blocked
+    waiting on them, but keep their seat (character) intact — rejoining
+    later with the same room code via join_room() restores it rather than
+    generating a new character. If the host leaves, the next player in turn
+    order (if any) becomes the new host. The room itself is never deleted
+    here, so the code stays valid for whoever wants to come back. Returns
+    the updated room, or None if it didn't exist."""
     room = load_room(room_id)
     if room is None:
         return None
 
-    room.seats.pop(user_id, None)
     if user_id in room.turn_order:
         idx = room.turn_order.index(user_id)
         room.turn_order.remove(user_id)
-        if room.turn_order and idx <= room.current_turn_index:
-            room.current_turn_index = room.current_turn_index % len(room.turn_order)
+        if room.turn_order:
+            if idx <= room.current_turn_index:
+                room.current_turn_index = room.current_turn_index % len(room.turn_order)
+        else:
+            room.current_turn_index = 0
 
     _clear_member(user_id)
 
-    if not room.seats:
-        delete_room(room_id)
-        return None
-
-    if room.host_user_id == user_id:
-        room.host_user_id = room.turn_order[0] if room.turn_order else next(iter(room.seats))
+    if room.host_user_id == user_id and room.turn_order:
+        room.host_user_id = room.turn_order[0]
 
     save_room(room)
     return room
