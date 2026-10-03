@@ -254,21 +254,12 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     }
 
 
-async def create_adventure(
-    user_id: int,
-    language_key: str,
-    category_key: str,
-    world_description: str | None,
-    character_description: str | None,
-    gender: str | None,
-    age: str | None,
-) -> dict:
-    """Generate the opening scene for a brand-new adventure, save a fresh
-    GameState for `user_id`, and return the same shape perform_turn() does
-    (so both the bot and the Mini App can render either result the same
-    way). Raises on a Gemini failure — nothing is saved in that case."""
-    language_name = lang.prompt_name_for(language_key)
-
+def build_character_brief(
+    character_description: str | None, gender: str | None, age: str | None
+) -> tuple[str, dict]:
+    """Shared by solo and multiplayer character creation: returns the
+    instruction text to give Gemini plus the starting character_record
+    (before hp/money/inventory/attributes are filled in from its reply)."""
     if character_description:
         character_brief = (
             f"The player described the character like this: {character_description}. "
@@ -283,6 +274,24 @@ async def create_adventure(
             "Make up a name, class/profession, and a short backstory that fits the world."
         )
         character_record = {"gender": gender, "age": age, "generated": True}
+    return character_brief, character_record
+
+
+async def create_adventure(
+    user_id: int,
+    language_key: str,
+    category_key: str,
+    world_description: str | None,
+    character_description: str | None,
+    gender: str | None,
+    age: str | None,
+) -> dict:
+    """Generate the opening scene for a brand-new adventure, save a fresh
+    GameState for `user_id`, and return the same shape perform_turn() does
+    (so both the bot and the Mini App can render either result the same
+    way). Raises on a Gemini failure — nothing is saved in that case."""
+    language_name = lang.prompt_name_for(language_key)
+    character_brief, character_record = build_character_brief(character_description, gender, age)
 
     try:
         opening = await gemini_client.generate_new_adventure_opening(

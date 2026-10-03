@@ -388,6 +388,7 @@ async def generate_story_turn(
     player_input: str,
     language_name: str,
     category_hint: str | None = None,
+    party_note: str | None = None,
     soften: bool = False,
 ) -> str:
     context = build_context(summary, recent_turns, character)
@@ -397,9 +398,16 @@ async def generate_story_turn(
         f"consistently in this turn too, not just at the start): {category_hint}\n\n"
         if category_hint else ""
     )
+    party_part = (
+        f"PARTY (multiplayer — this is a shared adventure; acknowledge the other party members "
+        f"as present/reacting where natural, but this turn's action and STATE tag belong only to "
+        f"the acting player named below): {party_note}\n\n"
+        if party_note else ""
+    )
     prompt = (
         f"Respond in: {language_name}.\n\n"
         f"{genre_part}"
+        f"{party_part}"
         f"{context}\n\n"
         f"CURRENT STATE (ground truth going into this turn — copy these exact values into "
         f"your closing [STATE:...] tag unless something in THIS turn explicitly changes them; "
