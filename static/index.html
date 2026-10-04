@@ -24,6 +24,11 @@
     --bg-image: none;
     --tg-extra-top: 0px;
     --tg-extra-bottom: 0px;
+    /* Reserve room for Telegram's native "close" button, which floats over
+       the page when true fullscreen isn't active (older clients, or before
+       requestFullscreen() resolves). Zeroed out once fullscreen is confirmed
+       — see applyHeaderSafeTop() in the script below. */
+    --header-safe-top: 54px;
   }
 
   /* --- Per-category themes, applied via html[data-theme="..."] --- */
@@ -86,7 +91,7 @@
   }
   body {
     padding: 16px;
-    padding-top: calc(16px + env(safe-area-inset-top, 0px) + var(--tg-extra-top, 0px));
+    padding-top: calc(16px + env(safe-area-inset-top, 0px) + var(--tg-extra-top, 0px) + var(--header-safe-top, 0px));
     padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px) + var(--tg-extra-bottom, 0px));
   }
 
@@ -144,7 +149,7 @@
     transform: translateX(100%);
     transition: transform 0.28s ease;
     z-index: 21;
-    padding: calc(16px + env(safe-area-inset-top, 0px) + var(--tg-extra-top, 0px)) 16px 16px;
+    padding: calc(16px + env(safe-area-inset-top, 0px) + var(--tg-extra-top, 0px) + var(--header-safe-top, 0px)) 16px 16px;
     overflow-y: auto;
   }
   .side-menu.open { transform: translateX(0); }
@@ -582,6 +587,21 @@ try { if (tg.requestFullscreen) tg.requestFullscreen(); } catch (e) {}
 // Fullscreen makes an accidental swipe-down easy to trigger right on top of
 // the story text — disable the swipe-to-close gesture while in the app.
 try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
+
+// Outside of true fullscreen, Telegram overlays its own "close" (X) button
+// on top of the page instead of reserving space for it — nothing in the
+// WebView API reports that header's height directly. We reserve a fixed
+// buffer for it via --header-safe-top (set in CSS) and drop that buffer to
+// zero only once fullscreen is confirmed active, since fullscreen removes
+// that native header entirely (the real notch/status-bar inset is still
+// covered separately via contentSafeAreaInset).
+function applyHeaderSafeTop() {
+  const fullscreen = !!tg.isFullscreen;
+  document.documentElement.style.setProperty("--header-safe-top", fullscreen ? "0px" : "54px");
+}
+try { tg.onEvent("fullscreenChanged", applyHeaderSafeTop); } catch (e) {}
+try { tg.onEvent("fullscreenFailed", applyHeaderSafeTop); } catch (e) {}
+applyHeaderSafeTop();
 
 function applyTelegramSafeArea() {
   const inset = tg.contentSafeAreaInset || tg.safeAreaInset || {};
