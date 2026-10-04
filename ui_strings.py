@@ -88,6 +88,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "waiting_for_turn": "⏳ Зараз хід іншого гравця...",
         "leave_room_button": "🚪 Покинути кімнату",
         "multiplayer_menu_title": "Мультиплеєр",
+        "lobby_title": "Лобі кімнати",
+        "lobby_start_button": "▶️ Почати пригоду",
+        "lobby_waiting_host": "⏳ Очікуємо, поки хост почне пригоду...",
     },
     "en": {
         "start": (
@@ -174,6 +177,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "waiting_for_turn": "⏳ Waiting for the other player's turn...",
         "leave_room_button": "🚪 Leave room",
         "multiplayer_menu_title": "Multiplayer",
+        "lobby_title": "Room lobby",
+        "lobby_start_button": "▶️ Start adventure",
+        "lobby_waiting_host": "⏳ Waiting for the host to start...",
     },
     "ru": {
         "start": (
@@ -260,6 +266,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "waiting_for_turn": "⏳ Сейчас ход другого игрока...",
         "leave_room_button": "🚪 Покинуть комнату",
         "multiplayer_menu_title": "Мультиплеер",
+        "lobby_title": "Лобби комнаты",
+        "lobby_start_button": "▶️ Начать приключение",
+        "lobby_waiting_host": "⏳ Ждём, пока хозяин начнёт приключение...",
     },
     "pl": {
         "start": (
@@ -346,6 +355,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "waiting_for_turn": "⏳ Teraz tura innego gracza...",
         "leave_room_button": "🚪 Opuść pokój",
         "multiplayer_menu_title": "Multiplayer",
+        "lobby_title": "Lobby pokoju",
+        "lobby_start_button": "▶️ Rozpocznij przygodę",
+        "lobby_waiting_host": "⏳ Czekamy, aż gospodarz rozpocznie przygodę...",
     },
 }
 

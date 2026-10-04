@@ -872,15 +872,76 @@ function actionPath() {
   return roomMode ? "/api/room/action" : "/api/action";
 }
 
+function renderLobby(data) {
+  if (data.room_id) roomId = data.room_id;
+  const isHost = data.host_user_id === currentUserId;
+  const rows = (data.party || []).map(p =>
+    `<div>🧑 ${escapeHtml(p.display_name)}${p.user_id === data.host_user_id ? " 👑" : ""}</div>`
+  ).join("") || `<div class="empty-note">${t("empty_note_generic")}</div>`;
+  const action = isHost
+    ? `<button class="btn" onclick="startRoomAdventure()">${escapeHtml(t("lobby_start_button"))}</button>`
+    : `<div class="wiz-loading">${escapeHtml(t("lobby_waiting_host"))}</div>`;
+  onboardingHTML(`
+    <div class="wiz-title">${escapeHtml(t("lobby_title"))}</div>
+    <div class="preview-card">
+      <div>${escapeHtml(t("room_code_label"))}: <b>${escapeHtml(roomId || "")}</b></div>
+      <div style="margin-top:10px;">${rows}</div>
+    </div>
+    ${action}
+    <button class="btn secondary" onclick="leaveRoom()">${escapeHtml(t("leave_room_button"))}</button>
+  `);
+  document.getElementById("onboardingView").classList.add("active");
+  document.getElementById("storyView").classList.remove("active");
+  showTabs(false);
+}
+
+async function startRoomAdventure() {
+  onboardingHTML(`<div class="wiz-loading">${escapeHtml(t("creating"))}</div>`);
+  const data = await api("/api/room/start", {});
+  if (data.error) {
+    const message = data.error === "content_blocked"
+      ? t("content_blocked")
+      : t("error_prefix") + (data.detail || data.error);
+    onboardingHTML(
+      `<div class="wiz-loading">${escapeHtml(message)}</div>` +
+      `<button class="btn" onclick="loadState()">${escapeHtml(t("retry_button"))}</button>`
+    );
+    return;
+  }
+  document.getElementById("onboardingView").classList.remove("active");
+  document.getElementById("storyView").classList.add("active");
+  showTabs(true);
+  lastActiveUserId = data.active_user_id;
+  await applyState(data);
+}
+
 function startRoomPolling() {
   stopRoomPolling();
   roomPollTimer = setInterval(async () => {
     if (!roomMode) return;
     const data = await api("/api/room/state", {});
     if (data.error) return;
-    const changed = (data.log && data.log.length !== lastLog.length) || data.active_user_id !== lastActiveUserId;
+
+    const inLobbyView = document.getElementById("onboardingView").classList.contains("active");
+
+    if (!data.started) {
+      // Still in the lobby — refresh the seat list so a host sees new
+      // joiners show up, and anyone sees the host's display stay current.
+      if (inLobbyView) renderLobby(data);
+      return;
+    }
+
+    // The host just pressed "start" (or this is an ongoing game) — if we
+    // were showing the lobby, switch over to the story view now.
+    const justStarted = inLobbyView;
+    const changed = justStarted || (data.log && data.log.length !== lastLog.length) || data.active_user_id !== lastActiveUserId;
     lastActiveUserId = data.active_user_id;
     if (changed) {
+      if (justStarted) {
+        document.getElementById("onboardingView").classList.remove("active");
+        document.getElementById("storyView").classList.add("active");
+        showTabs(true);
+      }
       await applyState(data);
     } else {
       renderParty(data.party, data.active_user_id);
@@ -1128,9 +1189,20 @@ async function loadState() {
   const roomData = await api("/api/room/state", {});
   if (!roomData.error) {
     roomMode = true;
+    if (roomData.language) currentLanguage = roomData.language;
+    if (roomData.language && !gameUi) {
+      gameUi = await fetch(`/api/ui?lang=${roomData.language}`).then(r => r.json());
+      localizeStaticUI();
+    }
+    if (!roomData.started) {
+      renderLobby(roomData);
+      startRoomPolling();
+      return;
+    }
     showTabs(true);
     document.getElementById("onboardingView").classList.remove("active");
     document.getElementById("storyView").classList.add("active");
+    lastActiveUserId = roomData.active_user_id;
     await applyState(roomData);
     startRoomPolling();
     return;
@@ -1531,9 +1603,19 @@ async function startAdventure() {
   localizeStaticUI();
   roomMode = wizard.multiplayer === "host" || wizard.multiplayer === "join";
   roomId = data.room_id || wizard.roomId || null;
+
+  if (roomMode && !data.started) {
+    // Lobby: the shared opening scene waits until the host presses "start"
+    // (see renderLobby), so everyone who wants to join in time still can.
+    renderLobby(data);
+    startRoomPolling();
+    return;
+  }
+
   document.getElementById("onboardingView").classList.remove("active");
   document.getElementById("storyView").classList.add("active");
   showTabs(true);
+  lastActiveUserId = data.active_user_id;
   await applyState(data);
   if (roomMode) startRoomPolling();
 }

@@ -50,6 +50,7 @@ class RoomState:
     seats: dict[int, Seat] = field(default_factory=dict)  # key: user_id
     turn_order: list[int] = field(default_factory=list)  # user_ids, play order
     current_turn_index: int = 0
+    started: bool = False  # False = still in the lobby, waiting for the host to start
 
     def current_turn_user_id(self) -> int | None:
         if not self.turn_order:
@@ -90,6 +91,7 @@ class RoomState:
             },
             "turn_order": self.turn_order,
             "current_turn_index": self.current_turn_index,
+            "started": self.started,
         })
 
     @classmethod
@@ -113,6 +115,7 @@ class RoomState:
             seats=seats,
             turn_order=data.get("turn_order", []),
             current_turn_index=data.get("current_turn_index", 0),
+            started=data.get("started", False),
         )
 
 

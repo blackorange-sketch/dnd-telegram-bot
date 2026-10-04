@@ -460,6 +460,94 @@ async def generate_character_preview(
     return _extract_text(response)
 
 
+async def generate_character_sheet(
+    character_brief: str,
+    world_description: str | None,
+    category_hint: str,
+    language_name: str,
+    soften: bool = False,
+) -> str:
+    """Generate a standalone character sheet (short write-up + ATTRS + STATE
+    tags, no narrative scene or options) for a multiplayer party member who
+    is NOT getting their own opening scene — used when a room is created
+    (the host) and whenever someone joins a room, whether still in the lobby
+    or into an already-started game. Keeps every seat's stats independent of
+    whatever the shared opening scene ends up saying."""
+    if world_description:
+        world_part = f"World description: {world_description}"
+    else:
+        world_part = f"World category hint: {category_hint}"
+
+    prompt = (
+        f"Respond in: {language_name}.\n\n"
+        "For THIS response only, ignore the numbered-options rule — do not produce any "
+        "numbered options, just the short character write-up followed by the tags.\n\n"
+        f"{world_part}\n\n"
+        f"{character_brief}\n\n"
+        "THIS IS A NEW CHARACTER BEING CREATED for a multiplayer party — write a short "
+        "(2-4 sentence) introduction of this character fitting the world, then invent, "
+        "fitting the world and character: 4-5 short physical/mental attributes (see rule "
+        "11, the ATTRS tag), some starting money in a currency that fits the world, and "
+        "2-4 starting inventory items. Reflect the money and inventory in the closing "
+        f"STATE tag, and the attributes in the ATTRS tag placed right before it. Start at "
+        f"full health: hp=max_hp={DEFAULT_HP} unless the description implies a different "
+        "max HP, in which case use that."
+    )
+    if soften:
+        prompt += f"\n\n{SOFTEN_NOTE}"
+    model = get_model()
+    response = await asyncio.to_thread(model.generate_content, prompt)
+    return _extract_text(response)
+
+
+async def generate_party_opening(
+    category_label: str,
+    category_hint: str,
+    world_description: str | None,
+    party_brief: str,
+    first_actor_name: str,
+    first_actor_attributes: list[str],
+    language_name: str,
+    soften: bool = False,
+) -> str:
+    """Generate the shared opening scene for a multiplayer room where every
+    seated player's character already exists (each created individually via
+    generate_character_sheet beforehand) — this call only writes the
+    narrative that introduces the whole party together, plus the first set
+    of options. No STATE/ATTRS tags are needed here since nobody's stats are
+    being established by this call."""
+    if world_description:
+        world_part = f"World description: {world_description}"
+    else:
+        world_part = f"Invent a world yourself that fits this category ({category_hint})."
+
+    attrs_part = (
+        f" {first_actor_name}'s exact attribute names, if one genuinely fits an "
+        f"[ATTR:Label] tag on an option: {', '.join(first_actor_attributes)}."
+        if first_actor_attributes else ""
+    )
+
+    prompt = (
+        f"Respond in: {language_name}.\n\n"
+        "For THIS response only, ignore the closing STATE/ATTRS tag rules — every character "
+        "in this party already has their own stats from being created individually; just "
+        "write the opening scene and the numbered options, nothing else.\n\n"
+        f"World category: {category_label} ({category_hint}).\n"
+        f"{world_part}\n\n"
+        "This adventure begins with a full party of player characters together in the same "
+        f"opening scene — introduce each of them naturally, by name: {party_brief}\n\n"
+        f"The first to act will be {first_actor_name}.{attrs_part} The numbered options at "
+        "the end of your reply are for them to choose from.\n\n"
+        "Begin a new short adventure: describe the setting, the hook, and the opening scene "
+        "with the whole party present, then the list of action options."
+    )
+    if soften:
+        prompt += f"\n\n{SOFTEN_NOTE}"
+    model = get_model()
+    response = await asyncio.to_thread(model.generate_content, prompt)
+    return _extract_text(response)
+
+
 async def generate_new_adventure_opening(
     category_label: str,
     category_hint: str,

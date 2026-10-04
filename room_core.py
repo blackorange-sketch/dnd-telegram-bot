@@ -170,38 +170,48 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
     }
 
 
-async def create_room_adventure(
+async def create_character_for_seat(
     room: RoomState,
+    seat: Seat,
     character_description: str | None,
     gender: str | None,
     age: str | None,
-) -> dict:
-    """Generate the opening scene for a brand-new room, using the host's
-    character. Mirrors core.create_adventure closely."""
+    in_progress: bool,
+) -> None:
+    """Generate a full character sheet (description, hp/max_hp, money,
+    inventory, attributes) for one seat. Used for the host when a room is
+    first created, and for anyone joining later — whether the room is still
+    in the lobby (in_progress=False) or an adventure is already underway
+    (in_progress=True, which tweaks the brief so the model knows to fit the
+    character into an existing story rather than a blank one). Mutates
+    seat.character in place; the caller is responsible for saving the room."""
     language_name = lang.prompt_name_for(room.language)
     character_brief, character_record = core.build_character_brief(character_description, gender, age)
+    if in_progress:
+        character_brief += (
+            " This character is JOINING an adventure already in progress, not starting a new "
+            "one — just invent the character themselves, fitting the established world."
+        )
 
     try:
-        opening = await gemini_client.generate_new_adventure_opening(
-            category_label=wc.label_for(room.category, room.language),
-            category_hint=wc.hint_for(room.category),
-            world_description=room.world_description,
+        sheet = await gemini_client.generate_character_sheet(
             character_brief=character_brief,
+            world_description=room.world_description,
+            category_hint=wc.hint_for(room.category),
             language_name=language_name,
         )
     except gemini_client.ContentBlockedError:
-        logger.warning("Room opening blocked by safety filter, retrying once with a softened prompt")
-        opening = await gemini_client.generate_new_adventure_opening(
-            category_label=wc.label_for(room.category, room.language),
-            category_hint=wc.hint_for(room.category),
-            world_description=room.world_description,
+        logger.warning("Character sheet generation blocked by safety filter, retrying once softened")
+        sheet = await gemini_client.generate_character_sheet(
             character_brief=character_brief,
+            world_description=room.world_description,
+            category_hint=wc.hint_for(room.category),
             language_name=language_name,
             soften=True,
         )
 
-    text_after_state, parsed_state = gemini_client.parse_state_tag(opening)
-    clean_text, attrs = gemini_client.parse_attrs_tag(text_after_state)
+    text_after_state, parsed_state = gemini_client.parse_state_tag(sheet)
+    description_text, attrs = gemini_client.parse_attrs_tag(text_after_state)
     hp = parsed_state.get("hp", gemini_client.DEFAULT_HP)
     max_hp = parsed_state.get("max_hp", gemini_client.DEFAULT_HP)
 
@@ -215,11 +225,58 @@ async def create_room_adventure(
         character_record["inventory"] = parsed_state["inventory"]
     if attrs:
         character_record["attributes"] = attrs
+    # Keep the player's own description verbatim if they gave one; a
+    # randomly-generated character uses the model's short write-up instead.
+    character_record["description"] = character_record.get("description") or description_text.strip()
 
+    seat.character = character_record
+
+
+async def start_room_adventure(room: RoomState) -> dict:
+    """Host-triggered: generate ONE shared opening scene introducing every
+    currently seated player together, now that each of them already has a
+    character (see create_character_for_seat) — this is what makes a
+    multiplayer game open as a real group scene instead of a solo opening
+    with other characters bolted on afterward. Marks the room as started and
+    sets the first turn to turn_order[0]."""
+    language_name = lang.prompt_name_for(room.language)
+
+    party_lines = []
+    for uid in room.turn_order:
+        seat = room.seats.get(uid)
+        if seat:
+            who = seat.character.get("description") or "an adventurer"
+            party_lines.append(f"{seat.display_name}: {who}")
+    party_brief = "; ".join(party_lines)
+
+    first_uid = room.turn_order[0] if room.turn_order else room.host_user_id
+    first_seat = room.seats.get(first_uid)
+    first_actor_name = first_seat.display_name if first_seat else "the first player"
+    first_attrs = list((first_seat.character.get("attributes") or {}).keys()) if first_seat else []
+
+    kwargs = dict(
+        category_label=wc.label_for(room.category, room.language),
+        category_hint=wc.hint_for(room.category),
+        world_description=room.world_description,
+        party_brief=party_brief,
+        first_actor_name=first_actor_name,
+        first_actor_attributes=first_attrs,
+        language_name=language_name,
+    )
+    try:
+        opening = await gemini_client.generate_party_opening(**kwargs)
+    except gemini_client.ContentBlockedError:
+        logger.warning("Party opening blocked by safety filter, retrying once with a softened prompt")
+        opening = await gemini_client.generate_party_opening(**kwargs, soften=True)
+
+    # No STATE/ATTRS tags are expected here (every seat already has its own
+    # stats), but strip defensively in case the model emits one anyway —
+    # this text becomes the room's persistent shared history.
+    clean_text, _ignored_state = gemini_client.parse_state_tag(opening)
+    clean_text, _ignored_attrs = gemini_client.parse_attrs_tag(clean_text)
     display_text, options = core.format_options(clean_text, room.language)
 
-    host_seat = room.seats[room.host_user_id]
-    host_seat.character = character_record
+    room.started = True
     room.add_turn(f"[DM]: {display_text}")
     room.pending_options = options
     save_room(room)
@@ -227,48 +284,9 @@ async def create_room_adventure(
     return {
         "text": display_text,
         "options": options,
-        "character": host_seat.character,
         "defeated": False,
         "log": room.full_log,
         "active_user_id": room.current_turn_user_id(),
         "party": party_status(room),
+        "started": True,
     }
-
-
-async def create_joining_character(
-    room: RoomState,
-    seat: Seat,
-    character_description: str | None,
-    gender: str | None,
-    age: str | None,
-) -> dict:
-    """Generate a character for a player who just joined an in-progress
-    room, fitting the world already established by the host."""
-    language_name = lang.prompt_name_for(room.language)
-    character_brief, character_record = core.build_character_brief(character_description, gender, age)
-    character_brief += (
-        " This character is JOINING an adventure already in progress, not starting a new one — "
-        "just invent the character themselves, fitting the established world."
-    )
-
-    if character_description:
-        preview = character_description
-    else:
-        preview = await gemini_client.generate_character_preview(
-            gender=gender or "any",
-            age=age or "any",
-            world_description=room.world_description,
-            category_hint=wc.hint_for(room.category),
-            language_name=language_name,
-        )
-
-    character_record["category"] = room.category
-    character_record["world_description"] = room.world_description
-    character_record["hp"] = gemini_client.DEFAULT_HP
-    character_record["max_hp"] = gemini_client.DEFAULT_HP
-    character_record["description"] = character_record.get("description") or preview
-
-    seat.character = character_record
-    save_room(room)
-
-    return {"character": seat.character, "party": party_status(room)}

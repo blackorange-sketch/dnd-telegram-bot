@@ -280,12 +280,15 @@ async def api_action(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 
 def _room_render(room: rooms.RoomState, user_id: int) -> dict:
-    """Common shape for /api/room/state and the join/leave replies."""
+    """Common shape for /api/room/state and the create/join/leave replies.
+    Works both before the adventure starts (lobby: text/options empty) and
+    after (started: a normal story render, same shape /api/state uses)."""
     seat = room.seats.get(user_id)
     return {
         "room_id": room.room_id,
         "host_user_id": room.host_user_id,
         "language": room.language,
+        "started": room.started,
         "text": _last_dm_text(room),
         "options": room.pending_options,
         "character": seat.character if seat else None,
@@ -322,22 +325,26 @@ async def api_room_create(request: web.Request) -> web.Response:
         world_description=body.get("world_description"),
     )
 
+    # The host's character is generated right away, but the shared opening
+    # scene waits for the host to press "start" from the lobby — that way
+    # the opening can introduce every player who joined in time, together,
+    # instead of just the host with everyone else bolted on afterward.
+    seat = room.seats[user_id]
     try:
-        result = await room_core.create_room_adventure(
-            room,
+        await room_core.create_character_for_seat(
+            room, seat,
             character_description=body.get("character_description"),
             gender=body.get("gender"),
             age=body.get("age"),
+            in_progress=False,
         )
+        rooms.save_room(room)
     except Exception as e:
-        logger.exception("Gemini error creating room adventure")
+        logger.exception("Gemini error creating host character")
         rooms.delete_room(room.room_id)
         return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
 
-    result["room_id"] = room.room_id
-    result["host_user_id"] = room.host_user_id
-    result["is_turn"] = room.is_turn(user_id)
-    return web.json_response(result)
+    return web.json_response(_room_render(room, user_id))
 
 
 @routes.post("/api/room/join")
@@ -372,18 +379,57 @@ async def api_room_join(request: web.Request) -> web.Response:
     seat = room.seats[user_id]
     if not seat.character:
         try:
-            await room_core.create_joining_character(
-                room,
-                seat,
+            await room_core.create_character_for_seat(
+                room, seat,
                 character_description=body.get("character_description"),
                 gender=body.get("gender"),
                 age=body.get("age"),
+                in_progress=room.started,
             )
+            rooms.save_room(room)
         except Exception as e:
             logger.exception("Gemini error creating joining character")
             return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
 
     return web.json_response(_room_render(room, user_id))
+
+
+@routes.post("/api/room/start")
+async def api_room_start(request: web.Request) -> web.Response:
+    """Host-only: leave the lobby and generate the shared opening scene for
+    everyone currently seated."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_request"}, status=400)
+
+    user_id = _authed_user_id(body)
+    if user_id is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    room = rooms.load_room_for_user(user_id)
+    if room is None:
+        return web.json_response({"error": "no_active_room"}, status=404)
+    if room.host_user_id != user_id:
+        return web.json_response({"error": "not_host"}, status=403)
+    if room.started:
+        return web.json_response({"error": "already_started"}, status=409)
+    if not room.turn_order:
+        return web.json_response({"error": "no_players"}, status=400)
+
+    try:
+        result = await room_core.start_room_adventure(room)
+    except Exception as e:
+        logger.exception("Gemini error starting room adventure")
+        error_key = "content_blocked" if isinstance(e, gemini_client.ContentBlockedError) else "gemini_error"
+        return web.json_response({"error": error_key, "detail": str(e)}, status=502)
+
+    result["room_id"] = room.room_id
+    result["host_user_id"] = room.host_user_id
+    result["is_turn"] = room.is_turn(user_id)
+    seat = room.seats.get(user_id)
+    result["character"] = seat.character if seat else None
+    return web.json_response(result)
 
 
 @routes.post("/api/room/state")
@@ -418,6 +464,8 @@ async def api_room_action(request: web.Request) -> web.Response:
     room = rooms.load_room_for_user(user_id)
     if room is None:
         return web.json_response({"error": "no_active_room"}, status=404)
+    if not room.started:
+        return web.json_response({"error": "not_started"}, status=409)
 
     if not room.is_turn(user_id):
         return web.json_response({
