@@ -28,7 +28,7 @@
        the page when true fullscreen isn't active (older clients, or before
        requestFullscreen() resolves). Zeroed out once fullscreen is confirmed
        — see applyHeaderSafeTop() in the script below. */
-    --header-safe-top: 54px;
+    --header-safe-top: 56px;
   }
 
   /* --- Per-category themes, applied via html[data-theme="..."] --- */
@@ -588,16 +588,18 @@ try { if (tg.requestFullscreen) tg.requestFullscreen(); } catch (e) {}
 // the story text — disable the swipe-to-close gesture while in the app.
 try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
 
-// Outside of true fullscreen, Telegram overlays its own "close" (X) button
-// on top of the page instead of reserving space for it — nothing in the
-// WebView API reports that header's height directly. We reserve a fixed
-// buffer for it via --header-safe-top (set in CSS) and drop that buffer to
-// zero only once fullscreen is confirmed active, since fullscreen removes
-// that native header entirely (the real notch/status-bar inset is still
-// covered separately via contentSafeAreaInset).
+// Telegram floats its own controls on top of the page in both modes: a
+// "close" (X) pill when not in fullscreen, and a close pill plus a
+// minimize/menu pill when fullscreen IS active. contentSafeAreaInset is
+// supposed to report that floating row's height, but on a lot of Android
+// builds it reports 0 even while the pills are visible — so instead of
+// trusting it alone, we always reserve a minimum buffer ourselves and only
+// let Telegram's own number stretch it further (e.g. for a notch/punch-hole
+// camera on top of that).
+const MIN_HEADER_SAFE_TOP = 56;
+
 function applyHeaderSafeTop() {
-  const fullscreen = !!tg.isFullscreen;
-  document.documentElement.style.setProperty("--header-safe-top", fullscreen ? "0px" : "54px");
+  document.documentElement.style.setProperty("--header-safe-top", MIN_HEADER_SAFE_TOP + "px");
 }
 try { tg.onEvent("fullscreenChanged", applyHeaderSafeTop); } catch (e) {}
 try { tg.onEvent("fullscreenFailed", applyHeaderSafeTop); } catch (e) {}
@@ -605,7 +607,8 @@ applyHeaderSafeTop();
 
 function applyTelegramSafeArea() {
   const inset = tg.contentSafeAreaInset || tg.safeAreaInset || {};
-  document.documentElement.style.setProperty("--tg-extra-top", (inset.top || 0) + "px");
+  const extraTop = Math.max((inset.top || 0) - MIN_HEADER_SAFE_TOP, 0);
+  document.documentElement.style.setProperty("--tg-extra-top", extraTop + "px");
   document.documentElement.style.setProperty("--tg-extra-bottom", (inset.bottom || 0) + "px");
 }
 try {
