@@ -236,7 +236,10 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
         # the same 3-tier fallback again. Keep just this exchange.
         game.recent_turns = [f"[Player]: {player_input}"]
 
-    game.add_turn(f"[DM]: {clean_text}")
+    # Store the cleaned narration (options already stripped out), not the
+    # raw clean_text — otherwise the numbered option lines end up duplicated
+    # in both the buttons and the scrollable turn history/log.
+    game.add_turn(f"[DM]: {display_text}")
     game.pending_options = options
     game.turn_count += 1
     await maybe_summarize(game)
@@ -331,7 +334,7 @@ async def create_adventure(
     display_text, options = format_options(clean_text, language_key)
 
     game = GameState(user_id=user_id, character=character_record, language=language_key)
-    game.add_turn(f"[DM]: {clean_text}")
+    game.add_turn(f"[DM]: {display_text}")
     game.pending_options = options
     save_state(game)
 

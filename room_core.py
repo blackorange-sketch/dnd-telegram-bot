@@ -147,7 +147,9 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
     if used_last_resort:
         room.recent_turns = [f"[{seat.display_name}]: {player_input}"]
 
-    room.add_turn(f"[DM]: {clean_text}")
+    # Store the cleaned narration (options stripped), not the raw clean_text,
+    # so option lines aren't duplicated into the shared turn history/log.
+    room.add_turn(f"[DM]: {display_text}")
     room.pending_options = options
     room.turn_count += 1
     await maybe_summarize_room(room)
@@ -218,7 +220,7 @@ async def create_room_adventure(
 
     host_seat = room.seats[room.host_user_id]
     host_seat.character = character_record
-    room.add_turn(f"[DM]: {clean_text}")
+    room.add_turn(f"[DM]: {display_text}")
     room.pending_options = options
     save_room(room)
 
