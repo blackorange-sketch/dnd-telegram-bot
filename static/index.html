@@ -572,6 +572,10 @@
       <button class="btn secondary" id="createRoomMenuBtn" onclick="openMultiplayerFromMenu('host')">➕ Створити кімнату</button>
       <button class="btn secondary" id="joinRoomMenuBtn" onclick="openMultiplayerFromMenu('join')">🔑 Приєднатися за кодом</button>
     </div>
+
+    <div class="side-menu-section" id="endGameMenuSection">
+      <button class="btn secondary" id="endGameBtn" onclick="confirmEndAdventure()">🏁 Завершити пригоду</button>
+    </div>
   </div>
 
   <div id="onboardingView" class="view active"></div>
@@ -697,6 +701,7 @@ function localizeStaticUI() {
   document.getElementById("multiplayerTitle").textContent = t("multiplayer_menu_title");
   document.getElementById("createRoomMenuBtn").textContent = "➕ " + t("mode_create_room").replace(/^[^\s]+\s*/, "");
   document.getElementById("joinRoomMenuBtn").textContent = "🔑 " + t("mode_join_room").replace(/^[^\s]+\s*/, "");
+  document.getElementById("endGameBtn").textContent = "🏁 " + t("end_adventure_button");
 }
 
 let lastCharacter = null;
@@ -857,6 +862,7 @@ function openMenu() {
   document.getElementById("themeToggle").checked = useCategoryTheme;
   document.getElementById("roomMenuSection").style.display = roomMode ? "block" : "none";
   document.getElementById("multiplayerMenuSection").style.display = roomMode ? "none" : "block";
+  document.getElementById("endGameMenuSection").style.display = roomMode ? "none" : "block";
   renderMenuLog();
 }
 
@@ -904,6 +910,24 @@ async function leaveRoom() {
   await api("/api/room/leave", {});
   roomMode = false;
   roomId = null;
+  startOnboarding();
+}
+
+// Ends the current solo adventure (deletes its save) and returns to the
+// very first screen. Uses Telegram's own confirm dialog when available so
+// it looks native instead of a plain browser confirm() popup.
+function confirmEndAdventure() {
+  const msg = t("end_adventure_confirm");
+  if (tg.showConfirm) {
+    tg.showConfirm(msg, (confirmed) => { if (confirmed) endAdventure(); });
+  } else if (window.confirm(msg)) {
+    endAdventure();
+  }
+}
+
+async function endAdventure() {
+  closeMenu();
+  await api("/api/end", {});
   startOnboarding();
 }
 

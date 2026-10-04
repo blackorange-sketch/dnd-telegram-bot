@@ -16,7 +16,7 @@ import room_core
 import rooms
 import ui_strings as ui
 import world_categories as wc
-from game_state import load_state
+from game_state import delete_state, load_state
 from telegram_auth import verify_init_data
 
 logger = logging.getLogger(__name__)
@@ -200,6 +200,24 @@ async def api_create(request: web.Request) -> web.Response:
         return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
 
     return web.json_response(result)
+
+
+@routes.post("/api/end")
+async def api_end(request: web.Request) -> web.Response:
+    """End the player's current solo adventure (if any) so they can start a
+    fresh one from the beginning. A multiplayer room is left via the
+    separate /api/room/leave, not this endpoint."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    user_id = _authed_user_id(body)
+    if user_id is None:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    delete_state(user_id)
+    return web.json_response({"ok": True})
 
 
 @routes.post("/api/action")
