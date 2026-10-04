@@ -212,6 +212,18 @@ Follow these rules on every reply:
     willpower — whatever suits the setting), each an integer from 1 to 10. \
     Never output this tag on ordinary story turns — attributes are set \
     once at character creation and stay fixed afterward.
+
+12. SCENE VARIETY: combat is one tool among several, not the default outcome \
+    of a turn. Most of the adventure should move forward through exploration, \
+    investigation, conversation and social maneuvering, puzzles, bargaining, \
+    travel, discovery, or quiet character moments — treat a fight as a \
+    deliberate, occasional beat, not something that starts every time danger \
+    is mentioned. Many obstacles are better solved by talking a way past them, \
+    sneaking around, finding a clever workaround, or simply walking away than \
+    by drawing a weapon. When you write the numbered options (rule 8), make a \
+    genuine effort to include at least one non-violent approach (talk, \
+    persuade, investigate, sneak, retreat, trade, search for another way) \
+    whenever the scene allows it, instead of a menu of attack variants.
 """.format(roll_marker=ROLL_MARKER, attr_marker_open=ATTR_MARKER_OPEN, attr_marker_close=ATTR_MARKER_CLOSE)
 
 

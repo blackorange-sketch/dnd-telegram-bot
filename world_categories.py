@@ -81,6 +81,46 @@ CATEGORIES: dict[str, dict] = {
             "ru": "⚙️ Стимпанк", "pl": "⚙️ Steampunk",
         },
     },
+    "detective": {
+        "hint": (
+            "noir mystery/detective fiction: a rain-slicked city or a quiet town hiding secrets, "
+            "murders, disappearances, blackmail, con artists, dusty case files, smoky bars, "
+            "unreliable witnesses. The player is the investigator — this genre runs on clues, "
+            "interrogation, deduction, and tailing suspects far more than on physical violence; "
+            "a gun exists but is rarely the answer. Currency is ordinary cash. Tone: cynical, "
+            "atmospheric, slow-burn tension building toward a reveal."
+        ),
+        "labels": {
+            "uk": "🕵️ Детектив", "en": "🕵️ Detective",
+            "ru": "🕵️ Детектив", "pl": "🕵️ Detektyw",
+        },
+    },
+    "western": {
+        "hint": (
+            "wild west frontier: dusty towns, saloons, cattle ranches, outlaws, bounty hunters, "
+            "railroads pushing into open country, sheriffs with little real backup, long rides "
+            "across harsh land. Currency is dollars. Tone: sun-baked, laconic, a mix of lawless "
+            "danger and quiet frontier grit — standoffs matter more for the tension before them "
+            "than constant gunfire."
+        ),
+        "labels": {
+            "uk": "🤠 Вестерн", "en": "🤠 Western",
+            "ru": "🤠 Вестерн", "pl": "🤠 Western",
+        },
+    },
+    "pirates": {
+        "hint": (
+            "age-of-sail piracy: tall ships, open ocean, hidden coves, port towns, treasure maps, "
+            "naval patrols, rival crews, storms, mutiny, smuggling. As much about navigation, "
+            "ship's politics, bargaining with port authorities, and the hunt for a legendary "
+            "treasure as it is about cutlass duels. Currency is gold coins/doubloons. Tone: "
+            "swashbuckling and adventurous, with real danger from the sea itself, not just people."
+        ),
+        "labels": {
+            "uk": "🏴‍☠️ Пірати", "en": "🏴‍☠️ Pirates",
+            "ru": "🏴‍☠️ Пираты", "pl": "🏴‍☠️ Piraci",
+        },
+    },
 }
 
 RANDOM_KEY = "random"
@@ -112,6 +152,9 @@ SHORT_HINTS = {
     "horror": "horror — dread, unease, ambiguity; unsettling, not heroic",
     "cyberpunk": "cyberpunk — neon megacity, corporations, implants, noir cynicism",
     "steampunk": "steampunk — steam/clockwork tech, airships, brass, Victorian flavor",
+    "detective": "noir detective — clues, interrogation, deduction over violence",
+    "western": "wild west — frontier towns, outlaws, bounty hunting, sun-baked grit",
+    "pirates": "age-of-sail piracy — ships, treasure, ports, storms, swashbuckling",
 }
 
 

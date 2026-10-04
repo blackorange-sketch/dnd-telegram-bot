@@ -8,7 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Orbitron:wght@600;800&family=Creepster&family=Audiowide&family=Special+Elite&family=Metal+Mania&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Orbitron:wght@600;800&family=Creepster&family=Audiowide&family=Special+Elite&family=Metal+Mania&family=Courier+Prime:wght@700&family=Rye&family=Pirata+One&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light dark;
@@ -32,6 +32,17 @@
   }
 
   /* --- Per-category themes, applied via html[data-theme="..."] --- */
+  /* Used before a category is chosen yet (language/mode picker, room lobby,
+     character creation) so the very first screens match the same visual
+     language as the game itself, instead of a plain generic gray. */
+  html[data-theme="default"] {
+    --bg: #0f0f1a; --card: rgba(167, 139, 250, 0.10); --btn: #4c3a8a;
+    --btn-text: #f3e9ff; --hint: #9a93c9; --hp: #e5484d; --attr: #c9a4ff;
+    --text: #ece9f7; --font-heading: 'Cinzel', serif;
+    --btn-glow: inset 0 0 0 1px rgba(201,164,255,0.4);
+    --bg-image: radial-gradient(circle at 20% 15%, rgba(201,164,255,0.12), transparent 45%),
+                radial-gradient(circle at 80% 85%, rgba(76,58,138,0.18), transparent 50%);
+  }
   html[data-theme="fantasy"] {
     --bg: #1c140c; --card: rgba(196, 154, 84, 0.14); --btn: #6b3f1d;
     --btn-text: #f4e4c1; --hint: #b89968; --hp: #c0392b; --attr: #d4af5a;
@@ -78,6 +89,30 @@
     --btn-glow: inset 0 0 0 1px rgba(201,151,62,0.45);
     --bg-image: radial-gradient(circle at 20% 85%, rgba(201,151,62,0.10), transparent 42%),
                 radial-gradient(circle at 80% 15%, rgba(110,74,31,0.14), transparent 46%);
+  }
+  html[data-theme="detective"] {
+    --bg: #15140f; --card: rgba(214, 196, 150, 0.10); --btn: #4a4235;
+    --btn-text: #f2e9d6; --hint: #9a8f78; --hp: #a8444a; --attr: #c9b26a;
+    --text: #e9e2cf; --font-heading: 'Courier Prime', monospace;
+    --btn-glow: inset 0 0 0 1px rgba(201,178,106,0.35);
+    --bg-image: radial-gradient(circle at 50% 0%, rgba(255,255,255,0.05), transparent 40%),
+                repeating-linear-gradient(180deg, rgba(255,255,255,0.015) 0 2px, transparent 2px 4px);
+  }
+  html[data-theme="western"] {
+    --bg: #1c140b; --card: rgba(196, 140, 68, 0.14); --btn: #7a4a22;
+    --btn-text: #fbe9c8; --hint: #bf9a68; --hp: #a8362c; --attr: #c98a3e;
+    --text: #f1dfb9; --font-heading: 'Rye', cursive;
+    --btn-glow: inset 0 0 0 1px rgba(201,138,62,0.4);
+    --bg-image: radial-gradient(circle at 15% 85%, rgba(201,138,62,0.12), transparent 44%),
+                radial-gradient(circle at 85% 10%, rgba(122,74,34,0.16), transparent 46%);
+  }
+  html[data-theme="pirates"] {
+    --bg: #081821; --card: rgba(224, 182, 86, 0.10); --btn: #0e5245;
+    --btn-text: #fdf3d8; --hint: #7fa6a3; --hp: #d9534f; --attr: #e0b656;
+    --text: #e7f2ee; --font-heading: 'Pirata One', cursive;
+    --btn-glow: inset 0 0 0 1px rgba(224,182,86,0.4);
+    --bg-image: radial-gradient(circle at 20% 90%, rgba(14,82,69,0.22), transparent 48%),
+                radial-gradient(circle at 85% 10%, rgba(224,182,86,0.10), transparent 42%);
   }
   * { box-sizing: border-box; }
   html, body {
@@ -678,17 +713,25 @@ const NEUTRAL_DICE = { dice: 0x5b6373, edge: 0x14151a, light: 0xffffff };
 // html[data-theme], this map covers what only JS can touch (the 3D dice
 // material/edge/light colors, and a small accent icon on action buttons).
 const THEMES = {
+  default:   { dice: 0x3a2f5c, edge: 0xc9a4ff, light: 0xd9c2ff, icon: "✨" },
   fantasy:   { dice: 0x5a4326, edge: 0xf0c674, light: 0xffd9a0, icon: "⚔️" },
   scifi:     { dice: 0x123244, edge: 0x29d8ff, light: 0x88ccff, icon: "🛰️" },
   postapo:   { dice: 0x4a3c28, edge: 0xd9a02b, light: 0xffcf7a, icon: "☢️" },
   horror:    { dice: 0x2a0a0a, edge: 0x8a2222, light: 0xff6666, icon: "💀" },
   cyberpunk: { dice: 0x2a0a3a, edge: 0xff2fe0, light: 0x38e8ff, icon: "🤖" },
   steampunk: { dice: 0x4a3216, edge: 0xc9973e, light: 0xffcf7a, icon: "⚙️" },
+  detective: { dice: 0x3a352a, edge: 0xc9b26a, light: 0xf2e9d6, icon: "🕵️" },
+  western:   { dice: 0x4a2f16, edge: 0xc98a3e, light: 0xffd9a0, icon: "🤠" },
+  pirates:   { dice: 0x0e3a30, edge: 0xe0b656, light: 0xfff0c2, icon: "🏴‍☠️" },
 };
 
+// No category yet (language/mode picker, lobby, character creation) falls
+// back to the "default" entry above instead of a plain, unstyled look —
+// matching look and feel is restored as soon as a category IS chosen.
 function applyTheme(category) {
-  const theme = useCategoryTheme ? THEMES[category] : null;
-  document.documentElement.dataset.theme = theme ? category : "";
+  const key = category || "default";
+  const theme = useCategoryTheme ? THEMES[key] : null;
+  document.documentElement.dataset.theme = theme ? key : "";
   currentThemeIcon = theme ? theme.icon : "";
   const diceColors = theme || NEUTRAL_DICE;
   if (dieMesh) {
