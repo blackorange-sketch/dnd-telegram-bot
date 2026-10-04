@@ -22,6 +22,8 @@
     --attr: #2ea6ff;
     --font-heading: inherit;
     --bg-image: none;
+    --tg-extra-top: 0px;
+    --tg-extra-bottom: 0px;
   }
 
   /* --- Per-category themes, applied via html[data-theme="..."] --- */
@@ -84,8 +86,8 @@
   }
   body {
     padding: 16px;
-    padding-top: calc(16px + env(safe-area-inset-top, 0px));
-    padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+    padding-top: calc(16px + env(safe-area-inset-top, 0px) + var(--tg-extra-top, 0px));
+    padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px) + var(--tg-extra-bottom, 0px));
   }
 
   /* --- Tabs (fixed bottom bar) --- */
@@ -96,7 +98,7 @@
     bottom: 0;
     display: flex;
     gap: 8px;
-    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px) + var(--tg-extra-bottom, 0px));
     background: var(--bg);
     border-top: 1px solid var(--card);
     z-index: 10;
@@ -142,7 +144,7 @@
     transform: translateX(100%);
     transition: transform 0.28s ease;
     z-index: 21;
-    padding: calc(16px + env(safe-area-inset-top, 0px)) 16px 16px;
+    padding: calc(16px + env(safe-area-inset-top, 0px) + var(--tg-extra-top, 0px)) 16px 16px;
     overflow-y: auto;
   }
   .side-menu.open { transform: translateX(0); }
@@ -573,6 +575,25 @@
 const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
+// True fullscreen (Bot API 8.0+ / Telegram 7.7+): drops the native header
+// bar entirely. Older clients don't have this method — fail silently and
+// fall back to the regular expanded view from tg.expand() above.
+try { if (tg.requestFullscreen) tg.requestFullscreen(); } catch (e) {}
+// Fullscreen makes an accidental swipe-down easy to trigger right on top of
+// the story text — disable the swipe-to-close gesture while in the app.
+try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
+
+function applyTelegramSafeArea() {
+  const inset = tg.contentSafeAreaInset || tg.safeAreaInset || {};
+  document.documentElement.style.setProperty("--tg-extra-top", (inset.top || 0) + "px");
+  document.documentElement.style.setProperty("--tg-extra-bottom", (inset.bottom || 0) + "px");
+}
+try {
+  tg.onEvent("safeAreaChanged", applyTelegramSafeArea);
+  tg.onEvent("contentSafeAreaChanged", applyTelegramSafeArea);
+} catch (e) {}
+applyTelegramSafeArea();
+
 const initData = tg.initData;
 const currentUserId = (tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user.id : null;
 
