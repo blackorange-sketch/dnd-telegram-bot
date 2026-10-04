@@ -1455,7 +1455,16 @@ function renderAgeStep() {
 function submitAge() {
   const value = document.getElementById("ageInput").value.trim();
   wizard.age = value || "any";
-  requestCharacterPreview();
+  if (wizard.multiplayer === "join") {
+    // Joining an in-progress room: there's no wizard.category/worldDescription
+    // on this client (the joiner never picks those — the room already has
+    // them), so the generic preview endpoint can't be used here. The server
+    // generates a fitting character directly from the room's own world when
+    // /api/room/join is called, so just submit straight away.
+    startAdventure();
+  } else {
+    requestCharacterPreview();
+  }
 }
 
 async function requestCharacterPreview() {

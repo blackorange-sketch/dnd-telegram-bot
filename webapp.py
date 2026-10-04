@@ -132,8 +132,8 @@ async def api_preview_world(request: web.Request) -> web.Response:
     if _authed_user_id(body) is None:
         return web.json_response({"error": "unauthorized"}, status=401)
 
-    lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
-    category_key = body.get("category", wc.all_keys()[0])
+    lang_key = body.get("language") or lang.DEFAULT_LANGUAGE
+    category_key = body.get("category") or wc.all_keys()[0]
     try:
         preview = await gemini_client.generate_world_preview(
             category_label=wc.label_for(category_key, lang_key),
@@ -155,8 +155,8 @@ async def api_preview_character(request: web.Request) -> web.Response:
     if _authed_user_id(body) is None:
         return web.json_response({"error": "unauthorized"}, status=401)
 
-    lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
-    category_key = body.get("category", wc.all_keys()[0])
+    lang_key = body.get("language") or lang.DEFAULT_LANGUAGE
+    category_key = body.get("category") or wc.all_keys()[0]
     try:
         preview = await gemini_client.generate_character_preview(
             gender=body.get("gender", "any"),
@@ -182,8 +182,8 @@ async def api_create(request: web.Request) -> web.Response:
     if user_id is None:
         return web.json_response({"error": "unauthorized"}, status=401)
 
-    lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
-    category_key = body.get("category", wc.all_keys()[0])
+    lang_key = body.get("language") or lang.DEFAULT_LANGUAGE
+    category_key = body.get("category") or wc.all_keys()[0]
 
     try:
         result = await core.create_adventure(
@@ -311,8 +311,8 @@ async def api_room_create(request: web.Request) -> web.Response:
     if rooms.room_id_for_user(user_id):
         return web.json_response({"error": "already_in_room"}, status=409)
 
-    lang_key = body.get("language", lang.DEFAULT_LANGUAGE)
-    category_key = body.get("category", wc.all_keys()[0])
+    lang_key = body.get("language") or lang.DEFAULT_LANGUAGE
+    category_key = body.get("category") or wc.all_keys()[0]
 
     room = rooms.create_room(
         host_user_id=user_id,
