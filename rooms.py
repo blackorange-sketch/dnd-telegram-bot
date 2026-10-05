@@ -16,6 +16,7 @@ import json
 import random
 import sqlite3
 import string
+import time
 from dataclasses import dataclass, field
 
 from game_state import DB_PATH, MAX_LOG_ENTRIES, MAX_RECENT_TURNS
@@ -26,6 +27,26 @@ ROOM_CODE_LENGTH = 6  # short enough to read aloud/type, no ambiguous O/0/I/1
 
 def _generate_room_code() -> str:
     return "".join(random.choices(ROOM_CODE_ALPHABET, k=ROOM_CODE_LENGTH))
+
+
+# In-memory-only heartbeat of when each seated player was last seen polling
+# /api/room/state or acting (webapp.py calls touch_seen() on every such
+# call). Deliberately NOT persisted to SQLite — it's just a heuristic for
+# whether a "your turn" push notification is worth sending (see webapp.py's
+# _notify_turn), and losing it on a restart only costs one possibly-redundant
+# notification, not a correctness problem.
+_LAST_SEEN: dict[tuple[str, int], float] = {}
+
+
+def touch_seen(room_id: str, user_id: int) -> None:
+    _LAST_SEEN[(room_id, user_id)] = time.monotonic()
+
+
+def seconds_since_seen(room_id: str, user_id: int) -> float:
+    ts = _LAST_SEEN.get((room_id, user_id))
+    if ts is None:
+        return float("inf")
+    return time.monotonic() - ts
 
 
 @dataclass

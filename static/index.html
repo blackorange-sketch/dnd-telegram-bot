@@ -659,6 +659,17 @@ applyTelegramSafeArea();
 const initData = tg.initData;
 const currentUserId = (tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user.id : null;
 
+// A room invite link opens the bot with a "join_<CODE>" deep-link payload;
+// the bot embeds that code into the Mini App's own URL as ?room=<CODE> when
+// it sends the launch button (see send_miniapp_button in main.py), so we
+// just have to read it back here once. Consumed (nulled) the first time
+// it's used, so navigating within the app afterward doesn't re-trigger it.
+let pendingJoinRoomCode = (new URLSearchParams(window.location.search).get("room") || "").trim().toUpperCase() || null;
+
+// Fetched lazily (once) from /api/config so the invite-share button can
+// build a t.me deep link — not needed at all until someone taps "Share".
+let botUsername = null;
+
 // --- Multiplayer (turn-based rooms) ---
 let roomMode = false;
 let roomId = null;
@@ -927,8 +938,32 @@ function confirmEndAdventure() {
 
 async function endAdventure() {
   closeMenu();
-  await api("/api/end", {});
-  startOnboarding();
+  const data = await api("/api/end", {});
+  if (data && data.epilogue) {
+    showEpilogueScreen(data.epilogue);
+  } else {
+    startOnboarding();
+  }
+}
+
+// A short closing passage shown full-screen instead of the normal story
+// view — used both when a character is defeated and when the player ends
+// an adventure early from the menu. Reuses the onboarding view's styling
+// since it's the same "between adventures" moment.
+function showEpilogueScreen(epilogueText) {
+  stopRoomPolling();
+  roomMode = false;
+  showTabs(false);
+  closeMenu();
+  document.getElementById("partyPanel").style.display = "none";
+  document.getElementById("storyView").classList.remove("active");
+  document.getElementById("characterView").classList.remove("active");
+  onboardingHTML(`
+    <div class="wiz-title">🏁 ${escapeHtml(t("epilogue_title"))}</div>
+    <div class="preview-card">${escapeHtml(epilogueText || "")}</div>
+    <button class="btn" onclick="startOnboarding()">${escapeHtml(t("new_adventure_button"))}</button>
+  `);
+  document.getElementById("onboardingView").classList.add("active");
 }
 
 function renderParty(party, activeUserId) {
@@ -977,12 +1012,41 @@ function renderLobby(data) {
       <div>${escapeHtml(t("room_code_label"))}: <b>${escapeHtml(roomId || "")}</b></div>
       <div style="margin-top:10px;">${rows}</div>
     </div>
+    <button class="btn secondary" onclick="shareRoomInvite()">📤 ${escapeHtml(t("share_invite_button"))}</button>
     ${action}
     <button class="btn secondary" onclick="leaveRoom()">${escapeHtml(t("leave_room_button"))}</button>
   `);
   document.getElementById("onboardingView").classList.add("active");
   document.getElementById("storyView").classList.remove("active");
   showTabs(false);
+}
+
+// Opens Telegram's native "share to chat" sheet with a deep link that drops
+// the recipient straight into joining this room — they don't need to be
+// told or type the room code themselves. Falls back to copying the link if
+// the bot's username couldn't be resolved (e.g. PUBLIC_URL not configured)
+// or the native share sheet isn't available (outside Telegram).
+async function shareRoomInvite() {
+  if (!roomId) return;
+  if (!botUsername) {
+    try {
+      const cfg = await fetch("/api/config").then(r => r.json());
+      botUsername = cfg.bot_username || null;
+    } catch (e) {}
+  }
+  if (!botUsername) {
+    try { await navigator.clipboard.writeText(roomId); } catch (e) {}
+    alert(t("share_invite_fallback").replace("{code}", roomId));
+    return;
+  }
+  const deepLink = `https://t.me/${botUsername}?start=join_${roomId}`;
+  const text = t("share_invite_text");
+  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(deepLink)}&text=${encodeURIComponent(text)}`;
+  if (tg.openTelegramLink) {
+    tg.openTelegramLink(shareUrl);
+  } else {
+    window.open(shareUrl, "_blank");
+  }
 }
 
 async function startRoomAdventure() {
@@ -1354,10 +1418,16 @@ function handleActionResult(data) {
   }
   renderRoll(data.roll);
   renderChanges(data.changes);
-  applyState(data);
   if (data.defeated) {
-    document.getElementById("story").textContent += "\n\n" + t("defeated_miniapp");
+    // The server has already deleted this save and generated a short
+    // closing passage — show the final narration plus that closing passage
+    // instead of the normal story view, with no action buttons (there's
+    // nothing left to act on).
+    const full = [data.text, data.epilogue].filter(Boolean).join("\n\n");
+    showEpilogueScreen(full);
+    return;
   }
+  applyState(data);
 }
 
 async function sendChoice(index, requiresRoll) {
@@ -1469,6 +1539,13 @@ async function selectLanguage(key) {
   wizard.language = key;
   onboardingHTML(`<div class="wiz-loading">...</div>`);
   wizard.uiStrings = await fetch(`/api/ui?lang=${key}`).then(r => r.json());
+  if (pendingJoinRoomCode) {
+    wizard.multiplayer = "join";
+    wizard.roomId = pendingJoinRoomCode;
+    pendingJoinRoomCode = null;
+    renderCharacterMethodStep();
+    return;
+  }
   renderModeStep();
 }
 

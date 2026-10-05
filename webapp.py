@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from aiohttp import web
 
 import core
@@ -16,15 +17,53 @@ import room_core
 import rooms
 import ui_strings as ui
 import world_categories as wc
-from game_state import delete_state, load_state
+from game_state import load_state
 from telegram_auth import verify_init_data
 
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 STATIC_DIR = Path(__file__).parent / "static"
 
 routes = web.RouteTableDef()
+
+# Set once at startup from main.py (set_bot()) so API handlers here can push
+# a Telegram message on their own — e.g. "it's your turn" — without webapp.py
+# needing to own the bot/polling lifecycle itself.
+_bot = None
+BOT_USERNAME: str | None = None
+
+
+def set_bot(bot_instance, username: str | None) -> None:
+    global _bot, BOT_USERNAME
+    _bot = bot_instance
+    BOT_USERNAME = username
+
+
+async def _notify_turn(room: "rooms.RoomState", user_id: int) -> None:
+    """Push a 'your turn' Telegram message to a seated player, but only if
+    they don't already seem to be in the app — if they were polling the room
+    just a few seconds ago, normal in-app polling will show them the new
+    turn anyway, and a push on top of that would just be noise."""
+    if _bot is None or not PUBLIC_URL:
+        return
+    if rooms.seconds_since_seen(room.room_id, user_id) < 8:
+        return
+    try:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=ui.t(room.language, "open_miniapp_button"),
+                web_app=WebAppInfo(url=f"{PUBLIC_URL.rstrip('/')}/miniapp"),
+            )
+        ]])
+        await _bot.send_message(
+            user_id,
+            ui.t(room.language, "your_turn_push", room=room.room_id),
+            reply_markup=kb,
+        )
+    except Exception:
+        logger.exception("Failed to send turn-notification push to %s", user_id)
 
 
 def _authed_user(body: dict) -> dict | None:
@@ -101,6 +140,14 @@ async def api_languages(request: web.Request) -> web.Response:
     return web.json_response([
         {"key": key, "label": lang.label_for(key)} for key in lang.all_keys()
     ])
+
+
+@routes.get("/api/config")
+async def api_config(request: web.Request) -> web.Response:
+    """Small bits of server config the frontend needs but isn't worth a
+    dedicated endpoint for — currently just the bot's @username, so the
+    room-invite share button can build a t.me deep link."""
+    return web.json_response({"bot_username": BOT_USERNAME})
 
 
 @routes.get("/api/categories")
@@ -205,8 +252,9 @@ async def api_create(request: web.Request) -> web.Response:
 @routes.post("/api/end")
 async def api_end(request: web.Request) -> web.Response:
     """End the player's current solo adventure (if any) so they can start a
-    fresh one from the beginning. A multiplayer room is left via the
-    separate /api/room/leave, not this endpoint."""
+    fresh one from the beginning. Generates a short epilogue for wherever
+    they left off before deleting the save. A multiplayer room is left via
+    the separate /api/room/leave, not this endpoint."""
     try:
         body = await request.json()
     except Exception:
@@ -216,8 +264,8 @@ async def api_end(request: web.Request) -> web.Response:
     if user_id is None:
         return web.json_response({"error": "unauthorized"}, status=401)
 
-    delete_state(user_id)
-    return web.json_response({"ok": True})
+    result = await core.end_adventure_now(user_id)
+    return web.json_response({"ok": True, "epilogue": result.get("epilogue")})
 
 
 @routes.post("/api/action")
@@ -362,6 +410,7 @@ async def api_room_create(request: web.Request) -> web.Response:
         rooms.delete_room(room.room_id)
         return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
 
+    rooms.touch_seen(room.room_id, user_id)
     return web.json_response(_room_render(room, user_id))
 
 
@@ -409,6 +458,7 @@ async def api_room_join(request: web.Request) -> web.Response:
             logger.exception("Gemini error creating joining character")
             return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
 
+    rooms.touch_seen(room.room_id, user_id)
     return web.json_response(_room_render(room, user_id))
 
 
@@ -447,6 +497,12 @@ async def api_room_start(request: web.Request) -> web.Response:
     result["is_turn"] = room.is_turn(user_id)
     seat = room.seats.get(user_id)
     result["character"] = seat.character if seat else None
+
+    rooms.touch_seen(room.room_id, user_id)
+    next_user_id = result.get("active_user_id")
+    if next_user_id is not None and next_user_id != user_id:
+        await _notify_turn(room, next_user_id)
+
     return web.json_response(result)
 
 
@@ -464,6 +520,11 @@ async def api_room_state(request: web.Request) -> web.Response:
     room = rooms.load_room_for_user(user_id)
     if room is None:
         return web.json_response({"error": "no_active_room"}, status=404)
+
+    # Heartbeat: the frontend polls this endpoint every few seconds while the
+    # app is open, so this is what _notify_turn checks to decide whether a
+    # player already seems to be looking at the game (see its docstring).
+    rooms.touch_seen(room.room_id, user_id)
 
     return web.json_response(_room_render(room, user_id))
 
@@ -552,6 +613,12 @@ async def api_room_action(request: web.Request) -> web.Response:
 
     if roll_info:
         result["roll"] = roll_info
+
+    rooms.touch_seen(room.room_id, user_id)
+    next_user_id = result.get("active_user_id")
+    if next_user_id is not None and next_user_id != user_id:
+        await _notify_turn(room, next_user_id)
+
     return web.json_response(result)
 
 

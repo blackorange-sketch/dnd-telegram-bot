@@ -619,3 +619,45 @@ async def generate_summary(existing_summary: str, recent_turns: list[str], langu
     model = get_model()
     response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)
+
+
+async def generate_epilogue(
+    summary: str,
+    recent_turns: list[str],
+    character: dict,
+    language_name: str,
+    category_hint: str | None,
+    reason: str,
+    soften: bool = False,
+) -> str:
+    """A short (4-7 sentence) closing passage for a character's story —
+    either because they were defeated, or because the player chose to stop
+    here. No options, no STATE/ATTRS tags; this is the last thing shown for
+    this character before their save is deleted."""
+    history_block = f"Story so far (summary): {summary}\n" if summary else ""
+    if recent_turns:
+        history_block += "Most recent turns:\n" + "\n".join(recent_turns) + "\n"
+    category_part = f"Genre: {category_hint}\n" if category_hint else ""
+    reason_instruction = (
+        "The character has just been defeated / has fallen — write a short, fitting "
+        "closing scene for their end, in keeping with the genre's tone."
+        if reason == "defeated" else
+        "The player is stepping away from this adventure here, mid-story, by their own "
+        "choice — write a short closing passage that gives this moment a sense of "
+        "narrative closure (a pause in the story, not a death), as if their tale is "
+        "being set down for now rather than finished."
+    )
+    prompt = (
+        f"Respond in: {language_name}.\n\n"
+        "For THIS response only, ignore the numbered-options and STATE/ATTRS tag rules — "
+        "write ONLY a short (4-7 sentence) closing/epilogue passage for this character's "
+        "story, nothing before or after it.\n\n"
+        f"{category_part}{history_block}"
+        f"Character sheet: {json.dumps(character, ensure_ascii=False)}\n\n"
+        f"{reason_instruction}"
+    )
+    if soften:
+        prompt += f"\n\n{SOFTEN_NOTE}"
+    model = get_model()
+    response = await asyncio.to_thread(model.generate_content, prompt)
+    return _extract_text(response)

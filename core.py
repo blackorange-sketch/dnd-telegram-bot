@@ -9,7 +9,7 @@ import dice
 import gemini_client
 import languages as lang
 import world_categories as wc
-from game_state import SUMMARY_EVERY_N_TURNS, GameState, save_state
+from game_state import SUMMARY_EVERY_N_TURNS, GameState, delete_state, load_state, save_state
 
 logger = logging.getLogger(__name__)
 
@@ -243,14 +243,38 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     game.pending_options = options
     game.turn_count += 1
     await maybe_summarize(game)
-    save_state(game)
 
     hp = game.character.get("hp")
+    defeated = hp is not None and hp <= 0
+    epilogue = None
+    if defeated:
+        # The adventure ends here: no more options, and a short dedicated
+        # closing passage instead of just trailing off after the fatal hit.
+        try:
+            epilogue = await gemini_client.generate_epilogue(
+                summary=game.summary,
+                recent_turns=game.recent_turns,
+                character=game.character,
+                language_name=lang.prompt_name_for(lang_key),
+                category_hint=category_hint,
+                reason="defeated",
+            )
+            game.add_turn(f"[DM]: {epilogue}")
+        except Exception:
+            logger.exception("Epilogue generation failed; ending without one")
+        options = []
+        game.pending_options = []
+        save_state(game)
+        delete_state(game.user_id)
+    else:
+        save_state(game)
+
     return {
         "text": display_text,
         "options": options,
         "character": game.character,
-        "defeated": hp is not None and hp <= 0,
+        "defeated": defeated,
+        "epilogue": epilogue,
         "log": game.full_log,
         "changes": changes,
         "changes_line": format_changes_line(changes),
@@ -345,3 +369,31 @@ async def create_adventure(
         "defeated": False,
         "log": game.full_log,
     }
+
+
+async def end_adventure_now(user_id: int) -> dict:
+    """Used by the player's own 'End adventure' menu button: generate a
+    short closing passage for wherever they left off, then delete the save
+    so the next game starts fresh. Returns {"epilogue": None} if there was
+    no active game to end (nothing to do, caller just resets the UI)."""
+    game = load_state(user_id)
+    if game is None:
+        return {"epilogue": None}
+
+    category_key = game.character.get("category")
+    category_hint = wc.short_hint_for(category_key) if category_key else None
+    epilogue = None
+    try:
+        epilogue = await gemini_client.generate_epilogue(
+            summary=game.summary,
+            recent_turns=game.recent_turns,
+            character=game.character,
+            language_name=lang.prompt_name_for(game.language),
+            category_hint=category_hint,
+            reason="ended_by_player",
+        )
+    except Exception:
+        logger.exception("Epilogue generation failed; ending without one")
+
+    delete_state(user_id)
+    return {"epilogue": epilogue}

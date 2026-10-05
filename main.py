@@ -4,7 +4,7 @@ import os
 import random
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -152,11 +152,21 @@ async def maybe_summarize(game: GameState):
 # ---------------------------------------------------------------------------
 
 @dp.message(CommandStart())
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, command: CommandObject):
+    # A room invite link looks like https://t.me/<bot>?start=join_<CODE> —
+    # Telegram turns that into "/start join_<CODE>" for us. Pull the room
+    # code back out and hand it to the Mini App via its own URL (?room=...)
+    # so the friend lands straight in "join this room" instead of having to
+    # type the code in by hand.
+    room_code = None
+    args = command.args
+    if args and args.startswith("join_"):
+        room_code = args[len("join_"):].strip().upper() or None
+
     game = load_state(message.from_user.id)
     lang_key = game.language if game else lang.DEFAULT_LANGUAGE
     if PUBLIC_URL:
-        await send_miniapp_button(message, lang_key)
+        await send_miniapp_button(message, lang_key, room_code=room_code)
     else:
         await message.answer(ui.t(lang_key, "start"))
 
@@ -190,11 +200,15 @@ async def cmd_play(message: Message):
     await send_miniapp_button(message, lang_key)
 
 
-async def send_miniapp_button(message: Message, lang_key: str):
+async def send_miniapp_button(message: Message, lang_key: str, room_code: str | None = None):
     """Send the button that opens the Mini App. Works whether or not the
     person has an active game — the Mini App itself shows the creation
-    wizard when there's no game yet, or the story when there is."""
+    wizard when there's no game yet, or the story when there is. A
+    room_code (from a room-invite deep link) is passed through as a query
+    param so the Mini App can jump straight into joining that room."""
     url = f"{PUBLIC_URL.rstrip('/')}/miniapp"
+    if room_code:
+        url += f"?room={room_code}"
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=ui.t(lang_key, "open_miniapp_button"), web_app=WebAppInfo(url=url))
     ]])
@@ -562,6 +576,12 @@ async def handle_roll_button(callback: CallbackQuery):
 async def main():
     if not BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set (check your .env file)")
+
+    # Lets webapp.py's API handlers push Telegram messages on their own
+    # (e.g. a "your turn" notification) without owning the bot/polling
+    # lifecycle themselves.
+    me = await bot.get_me()
+    webapp.set_bot(bot, me.username)
 
     app = webapp.create_app()
     runner = web.AppRunner(app)
