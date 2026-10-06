@@ -732,6 +732,21 @@ async def _generate_ensuring_narration(model, prompt: str):
     return response
 
 
+def _log_turn_result(label: str, text: str, state: dict, attrs: dict | None = None, journal: dict | None = None) -> None:
+    """Visibility into exactly what Gemini actually returned for this call —
+    prints to the Railway logs so a "why is X empty in the app" report can be
+    diagnosed from real data instead of guessing at prompt wording again.
+    Safe to call unconditionally; this is pure logging, never raises."""
+    logger.info(
+        "%s: text_len=%d state_keys=%s attrs_keys=%s journal_keys=%s",
+        label,
+        len(text or ""),
+        sorted((state or {}).keys()),
+        sorted((attrs or {}).keys()) if attrs is not None else None,
+        sorted((journal or {}).keys()) if journal is not None else None,
+    )
+
+
 async def generate_story_turn(
     summary: str,
     recent_turns: list[str],
@@ -773,6 +788,7 @@ async def generate_story_turn(
     clean_text, _ = parse_state_tag(text)  # defensive: strip a stray legacy tag if one appears
     state = _extract_state(response, text)
     journal = _extract_journal(response)
+    _log_turn_result("generate_story_turn", clean_text, state, journal=journal)
     return clean_text, state, journal
 
 
@@ -857,6 +873,7 @@ async def generate_character_sheet(
     clean_text, _ = parse_attrs_tag(text_after_state)
     state = _extract_state(response, text)
     attrs = _extract_attrs(response, text)
+    _log_turn_result("generate_character_sheet", clean_text, state, attrs=attrs)
     return clean_text, state, attrs
 
 
@@ -915,6 +932,7 @@ async def generate_party_opening(
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     journal = _extract_journal(response)
+    _log_turn_result("generate_party_opening", text, {}, journal=journal)
     return text, journal
 
 
@@ -968,6 +986,7 @@ async def generate_new_adventure_opening(
     state = _extract_state(response, text)
     attrs = _extract_attrs(response, text)
     journal = _extract_journal(response)
+    _log_turn_result("generate_new_adventure_opening", clean_text, state, attrs=attrs, journal=journal)
     return clean_text, state, attrs, journal
 
 
