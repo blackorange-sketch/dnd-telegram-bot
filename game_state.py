@@ -38,6 +38,13 @@ class GameState:
     language: str = "uk"
     turn_count: int = 0
     pending_options: list[dict] = field(default_factory=list)
+    # Journal: world-state facts reported via Gemini's update_journal function
+    # call (see gemini_client.py), kept separate from the character sheet
+    # since they describe the world, not the character.
+    location: dict | None = None  # {"name": ..., "description": ...} or None
+    visited_locations: list[str] = field(default_factory=list)
+    npcs: dict = field(default_factory=dict)  # name -> {"description": ..., "relationship": ...}
+    quests: dict = field(default_factory=dict)  # title -> {"status": ..., "description": ...}
 
     def to_json(self) -> str:
         return json.dumps({
@@ -48,6 +55,10 @@ class GameState:
             "language": self.language,
             "turn_count": self.turn_count,
             "pending_options": self.pending_options,
+            "location": self.location,
+            "visited_locations": self.visited_locations,
+            "npcs": self.npcs,
+            "quests": self.quests,
         })
 
     @classmethod
@@ -62,6 +73,10 @@ class GameState:
             language=data.get("language", "uk"),
             turn_count=data.get("turn_count", 0),
             pending_options=data.get("pending_options", []),
+            location=data.get("location"),
+            visited_locations=data.get("visited_locations", []),
+            npcs=data.get("npcs", {}),
+            quests=data.get("quests", {}),
         )
 
     def add_turn(self, text: str) -> None:

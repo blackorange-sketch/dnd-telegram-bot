@@ -455,6 +455,90 @@
     color: var(--hint);
     font-size: 14px;
   }
+  .equipped-badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--attr);
+    color: #fff;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  /* --- Journal view --- */
+  .journal-subtabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .journal-subtab-btn {
+    flex: 1;
+    padding: 9px 6px;
+    border-radius: 10px;
+    border: none;
+    background: var(--card);
+    color: var(--text);
+    font-family: var(--font-heading);
+    font-size: 13px;
+    opacity: 0.6;
+    cursor: pointer;
+  }
+  .journal-subtab-btn.active { opacity: 1; background: var(--btn); }
+  .journal-panel { display: none; }
+  .journal-panel.active { display: block; }
+  .location-card {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--card);
+    margin-bottom: 14px;
+  }
+  .location-card .location-name {
+    font-family: var(--font-heading);
+    font-size: 15px;
+    margin-bottom: 4px;
+  }
+  .location-card .location-desc { font-size: 13px; color: var(--hint); }
+  .visited-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .visited-chip {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--bg);
+    color: var(--hint);
+  }
+  .npc-card, .quest-card {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--card);
+    margin-bottom: 10px;
+  }
+  .npc-name, .quest-title {
+    font-family: var(--font-heading);
+    font-size: 14px;
+  }
+  .npc-relationship, .quest-status {
+    display: inline-block;
+    font-size: 10px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: var(--attr);
+    color: #fff;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .quest-status.completed { background: var(--hp); }
+  .quest-status.failed { background: #777; }
+  .npc-desc, .quest-desc {
+    font-size: 13px;
+    color: var(--hint);
+    margin-top: 4px;
+  }
 
   /* --- Onboarding wizard --- */
   #onboardingView { padding-bottom: 20px; }
@@ -538,6 +622,7 @@
   <div id="tabs" style="display:none;">
     <button class="tab-btn active" id="tabStoryBtn" onclick="switchTab('story')">🗺️ Історія</button>
     <button class="tab-btn" id="tabCharBtn" onclick="switchTab('character')">🧙 Персонаж</button>
+    <button class="tab-btn" id="tabJournalBtn" onclick="switchTab('journal')">📖 Журнал</button>
     <button class="tab-btn" id="menuBtn" onclick="openMenu()">☰ Меню</button>
   </div>
 
@@ -613,6 +698,17 @@
 
     <div class="section-title" id="invTitle">Інвентар</div>
     <div id="charInventory"></div>
+  </div>
+
+  <div id="journalView" class="view">
+    <div class="journal-subtabs">
+      <button class="journal-subtab-btn active" id="journalSubtabQuests" onclick="switchJournalSubtab('quests')">📜 <span id="journalQuestsLabel">Квести</span></button>
+      <button class="journal-subtab-btn" id="journalSubtabNpcs" onclick="switchJournalSubtab('npcs')">🧑‍🤝‍🧑 <span id="journalNpcsLabel">NPC</span></button>
+      <button class="journal-subtab-btn" id="journalSubtabLocations" onclick="switchJournalSubtab('locations')">🗺️ <span id="journalLocationsLabel">Локації</span></button>
+    </div>
+    <div class="journal-panel active" id="journalPanelQuests"></div>
+    <div class="journal-panel" id="journalPanelNpcs"></div>
+    <div class="journal-panel" id="journalPanelLocations"></div>
   </div>
 
 <script>
@@ -697,6 +793,10 @@ function t(key, vars) {
 function localizeStaticUI() {
   document.getElementById("tabStoryBtn").textContent = "🗺️ " + t("tab_story");
   document.getElementById("tabCharBtn").textContent = "🧙 " + t("tab_character");
+  document.getElementById("tabJournalBtn").innerHTML = "📖 " + escapeHtml(t("tab_journal"));
+  document.getElementById("journalQuestsLabel").textContent = t("journal_quests_tab");
+  document.getElementById("journalNpcsLabel").textContent = t("journal_npcs_tab");
+  document.getElementById("journalLocationsLabel").textContent = t("journal_locations_tab");
   document.getElementById("menuBtn").textContent = "☰ " + t("menu_label");
   document.getElementById("menuTitle").textContent = "⚙️ " + t("menu_label");
   document.getElementById("appearanceTitle").textContent = t("appearance_title");
@@ -717,6 +817,7 @@ function localizeStaticUI() {
 
 let lastCharacter = null;
 let lastLog = [];
+let lastJournal = {};
 let diceInterval = null;
 let currentThemeIcon = "";
 let useCategoryTheme = localStorage.getItem("useCategoryTheme") !== "false"; // default: on
@@ -862,9 +963,83 @@ function stopDiceAnimation(finalValue) {
 function switchTab(name) {
   document.getElementById("storyView").classList.toggle("active", name === "story");
   document.getElementById("characterView").classList.toggle("active", name === "character");
+  document.getElementById("journalView").classList.toggle("active", name === "journal");
   document.getElementById("tabStoryBtn").classList.toggle("active", name === "story");
   document.getElementById("tabCharBtn").classList.toggle("active", name === "character");
+  document.getElementById("tabJournalBtn").classList.toggle("active", name === "journal");
   if (name === "character") renderCharacterView();
+  if (name === "journal") renderJournal();
+}
+
+let journalSubtab = "quests";
+
+function switchJournalSubtab(name) {
+  journalSubtab = name;
+  document.getElementById("journalPanelQuests").classList.toggle("active", name === "quests");
+  document.getElementById("journalPanelNpcs").classList.toggle("active", name === "npcs");
+  document.getElementById("journalPanelLocations").classList.toggle("active", name === "locations");
+  document.getElementById("journalSubtabQuests").classList.toggle("active", name === "quests");
+  document.getElementById("journalSubtabNpcs").classList.toggle("active", name === "npcs");
+  document.getElementById("journalSubtabLocations").classList.toggle("active", name === "locations");
+}
+
+function renderJournal() {
+  const j = lastJournal || {};
+
+  // Quests
+  const quests = j.quests || [];
+  const questsEl = document.getElementById("journalPanelQuests");
+  if (!quests.length) {
+    questsEl.innerHTML = `<div class="empty-note">${t("no_quests_note")}</div>`;
+  } else {
+    const statusLabel = s => t("quest_status_" + s) || s;
+    questsEl.innerHTML = quests.map(q => `
+      <div class="quest-card">
+        <span class="quest-title">${escapeHtml(q.title || "")}</span>
+        <span class="quest-status ${escapeHtml(q.status || "active")}">${escapeHtml(statusLabel(q.status || "active"))}</span>
+        ${q.description ? `<div class="quest-desc">${escapeHtml(q.description)}</div>` : ""}
+      </div>
+    `).join("");
+  }
+
+  // NPCs
+  const npcs = j.npcs || [];
+  const npcsEl = document.getElementById("journalPanelNpcs");
+  if (!npcs.length) {
+    npcsEl.innerHTML = `<div class="empty-note">${t("no_npcs_note")}</div>`;
+  } else {
+    npcsEl.innerHTML = npcs.map(n => `
+      <div class="npc-card">
+        <span class="npc-name">${escapeHtml(n.name || "")}</span>
+        ${n.relationship ? `<span class="npc-relationship">${escapeHtml(n.relationship)}</span>` : ""}
+        ${n.description ? `<div class="npc-desc">${escapeHtml(n.description)}</div>` : ""}
+      </div>
+    `).join("");
+  }
+
+  // Locations
+  const locationsEl = document.getElementById("journalPanelLocations");
+  const visited = j.visited_locations || [];
+  if (!j.location && !visited.length) {
+    locationsEl.innerHTML = `<div class="empty-note">${t("no_locations_note")}</div>`;
+  } else {
+    let html = "";
+    if (j.location) {
+      html += `
+        <div class="location-card">
+          <div class="location-name">📍 ${escapeHtml(j.location.name || "")}</div>
+          ${j.location.description ? `<div class="location-desc">${escapeHtml(j.location.description)}</div>` : ""}
+        </div>
+      `;
+    }
+    const others = visited.filter(name => !j.location || name !== j.location.name);
+    if (others.length) {
+      html += `<div class="visited-chip-row">` +
+        others.map(name => `<span class="visited-chip">${escapeHtml(name)}</span>`).join("") +
+        `</div>`;
+    }
+    locationsEl.innerHTML = html;
+  }
 }
 
 function openMenu() {
@@ -896,6 +1071,7 @@ async function openMultiplayerFromMenu(mode) {
   document.getElementById("partyPanel").style.display = "none";
   document.getElementById("storyView").classList.remove("active");
   document.getElementById("characterView").classList.remove("active");
+  document.getElementById("journalView").classList.remove("active");
   document.getElementById("onboardingView").classList.add("active");
   if (mode === "host") {
     await chooseCreateRoomMode();
@@ -958,6 +1134,7 @@ function showEpilogueScreen(epilogueText) {
   document.getElementById("partyPanel").style.display = "none";
   document.getElementById("storyView").classList.remove("active");
   document.getElementById("characterView").classList.remove("active");
+  document.getElementById("journalView").classList.remove("active");
   onboardingHTML(`
     <div class="wiz-title">🏁 ${escapeHtml(t("epilogue_title"))}</div>
     <div class="preview-card">${escapeHtml(epilogueText || "")}</div>
@@ -1274,14 +1451,20 @@ function renderCharacterView() {
     }).join("");
   }
 
-  // Inventory
+  // Inventory — items are {name, equipped} objects; a plain string also
+  // tolerated defensively in case an older save slipped through unnormalized.
   const items = c.inventory || [];
   const invEl = document.getElementById("charInventory");
   if (!items.length) {
     invEl.innerHTML = `<div class="empty-note">${t("empty_note_generic")}</div>`;
   } else {
     invEl.innerHTML = `<div class="inv-grid">` +
-      items.map(item => `<div class="inv-item">🎒 ${item}</div>`).join("") +
+      items.map(item => {
+        const name = typeof item === "string" ? item : (item.name || "");
+        const equipped = typeof item === "object" && item && item.equipped;
+        const badge = equipped ? `<span class="equipped-badge">${escapeHtml(t("equipped_label"))}</span>` : "";
+        return `<div class="inv-item">🎒 ${escapeHtml(name)}${badge}</div>`;
+      }).join("") +
       `</div>`;
   }
 }
@@ -1303,6 +1486,7 @@ function renderMenuLog() {
 async function applyState(data) {
   lastCharacter = data.character || null;
   if (data.log) lastLog = data.log;
+  if (data.journal) lastJournal = data.journal;
   if (data.room_id) roomId = data.room_id;
   if (data.language) currentLanguage = data.language;
   if (data.language && !gameUi) {
@@ -1321,6 +1505,9 @@ async function applyState(data) {
 
   if (document.getElementById("characterView").classList.contains("active")) {
     renderCharacterView();
+  }
+  if (document.getElementById("journalView").classList.contains("active")) {
+    renderJournal();
   }
   if (document.getElementById("sideMenu").classList.contains("open")) {
     renderMenuLog();
@@ -1519,6 +1706,7 @@ function startOnboarding() {
   document.getElementById("partyPanel").style.display = "none";
   document.getElementById("storyView").classList.remove("active");
   document.getElementById("characterView").classList.remove("active");
+  document.getElementById("journalView").classList.remove("active");
   document.getElementById("onboardingView").classList.add("active");
   renderLanguageStep();
 }

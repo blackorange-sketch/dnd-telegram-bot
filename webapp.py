@@ -127,6 +127,7 @@ async def api_state(request: web.Request) -> web.Response:
         "character": game.character,
         "language": game.language,
         "log": game.full_log,
+        "journal": core.journal_payload(game),
     })
 
 
@@ -362,6 +363,7 @@ def _room_render(room: rooms.RoomState, user_id: int) -> dict:
         "active_user_id": room.current_turn_user_id(),
         "is_turn": room.is_turn(user_id),
         "party": room_core.party_status(room),
+        "journal": core.journal_payload(room),
     }
 
 

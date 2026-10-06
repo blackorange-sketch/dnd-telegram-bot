@@ -89,10 +89,10 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
 
     prev_hp = seat.character.get("hp")
     prev_money = seat.character.get("money")
-    prev_inventory = list(seat.character.get("inventory") or [])
+    prev_inventory = core.normalize_inventory(seat.character.get("inventory"))
 
     try:
-        clean_text, parsed_state = await gemini_client.generate_story_turn(
+        clean_text, parsed_state, journal = await gemini_client.generate_story_turn(
             summary=room.summary,
             recent_turns=room.recent_turns,
             character=seat.character,
@@ -105,7 +105,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
     except gemini_client.ContentBlockedError:
         logger.warning("Room turn blocked by safety filter, retrying once with a softened prompt")
         try:
-            clean_text, parsed_state = await gemini_client.generate_story_turn(
+            clean_text, parsed_state, journal = await gemini_client.generate_story_turn(
                 summary=room.summary,
                 recent_turns=room.recent_turns,
                 character=seat.character,
@@ -118,7 +118,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
             used_last_resort = False
         except gemini_client.ContentBlockedError:
             logger.warning("Still blocked after softening; retrying once more without raw recent-turn history")
-            clean_text, parsed_state = await gemini_client.generate_story_turn(
+            clean_text, parsed_state, journal = await gemini_client.generate_story_turn(
                 summary=room.summary,
                 recent_turns=[],
                 character=seat.character,
@@ -138,7 +138,11 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
     if "money" in parsed_state:
         seat.character["money"] = parsed_state["money"]
     if "inventory" in parsed_state:
-        seat.character["inventory"] = parsed_state["inventory"]
+        seat.character["inventory"] = core.normalize_inventory(parsed_state["inventory"])
+
+    # Journal (location/NPCs/quests) is shared party-wide state, so it's
+    # merged onto the room even though this turn was one seat's action.
+    core.apply_journal_update(room, journal)
 
     changes = core.compute_changes(prev_hp, prev_money, prev_inventory, seat.character)
     display_text, options = core.format_options(clean_text, lang_key)
@@ -166,6 +170,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
         "changes_line": core.format_changes_line(changes),
         "active_user_id": room.current_turn_user_id(),
         "party": party_status(room),
+        "journal": core.journal_payload(room),
     }
 
 
@@ -219,7 +224,7 @@ async def create_character_for_seat(
     if "money" in parsed_state:
         character_record["money"] = parsed_state["money"]
     if "inventory" in parsed_state:
-        character_record["inventory"] = parsed_state["inventory"]
+        character_record["inventory"] = core.normalize_inventory(parsed_state["inventory"])
     if attrs:
         character_record["attributes"] = attrs
     # Keep the player's own description verbatim if they gave one; a
@@ -261,10 +266,10 @@ async def start_room_adventure(room: RoomState) -> dict:
         language_name=language_name,
     )
     try:
-        opening = await gemini_client.generate_party_opening(**kwargs)
+        opening, journal = await gemini_client.generate_party_opening(**kwargs)
     except gemini_client.ContentBlockedError:
         logger.warning("Party opening blocked by safety filter, retrying once with a softened prompt")
-        opening = await gemini_client.generate_party_opening(**kwargs, soften=True)
+        opening, journal = await gemini_client.generate_party_opening(**kwargs, soften=True)
 
     # No STATE/ATTRS tags are expected here (every seat already has its own
     # stats), but strip defensively in case the model emits one anyway —
@@ -272,6 +277,8 @@ async def start_room_adventure(room: RoomState) -> dict:
     clean_text, _ignored_state = gemini_client.parse_state_tag(opening)
     clean_text, _ignored_attrs = gemini_client.parse_attrs_tag(clean_text)
     display_text, options = core.format_options(clean_text, room.language)
+
+    core.apply_journal_update(room, journal)
 
     room.started = True
     room.add_turn(f"[DM]: {display_text}")
@@ -286,4 +293,5 @@ async def start_room_adventure(room: RoomState) -> dict:
         "active_user_id": room.current_turn_user_id(),
         "party": party_status(room),
         "started": True,
+        "journal": core.journal_payload(room),
     }

@@ -102,14 +102,90 @@ UPDATE_STATE_FUNCTION = FunctionDeclaration(
             },
             "inventory": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Item name, e.g. 'rusty sword' or 'energy cell x3' (merge duplicates with a count).",
+                        },
+                        "equipped": {
+                            "type": "boolean",
+                            "description": "True if the character is currently wearing/wielding this item.",
+                        },
+                    },
+                    "required": ["name"],
+                },
                 "description": (
-                    "Lean list of notable items (at most ~10). Merge duplicates with a count "
-                    "('energy cell x3'); drop anything destroyed, used up, or trivial."
+                    "Lean list of notable items (at most ~10), each as {name, equipped}. "
+                    "Merge duplicates with a count in the name ('energy cell x3'); drop anything "
+                    "destroyed, used up, or trivial. Only mark 'equipped' true for things actively "
+                    "worn/wielded right now (a weapon in hand, armor being worn) — most items are not."
                 ),
             },
         },
         "required": ["hp", "max_hp"],
+    },
+)
+
+UPDATE_JOURNAL_FUNCTION = FunctionDeclaration(
+    name="update_journal",
+    description=(
+        "Record notable world-state facts: the current location, NPCs the party has met or "
+        "whose standing changed, and quests/goals that were given, updated, or resolved. "
+        "Call this AT MOST ONCE per reply, and ONLY when this turn actually introduced or "
+        "changed one of these things — most turns call nothing here at all. Omit any field "
+        "that didn't change this turn; never repeat the whole known world just to be safe."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "object",
+                "description": "The party's current location — include only if it just changed this turn.",
+                "properties": {
+                    "name": {"type": "string", "description": "Short place name, e.g. 'The Rusty Anchor tavern'."},
+                    "description": {"type": "string", "description": "One short sentence about this place."},
+                },
+                "required": ["name"],
+            },
+            "npcs": {
+                "type": "array",
+                "description": (
+                    "Only NPCs newly met or whose description/relationship meaningfully changed "
+                    "this turn — not the full known cast."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": "string", "description": "One short sentence: who they are."},
+                        "relationship": {
+                            "type": "string",
+                            "description": "Short label, e.g. 'friendly', 'hostile', 'suspicious', 'owes a favor'.",
+                        },
+                    },
+                    "required": ["name"],
+                },
+            },
+            "quests": {
+                "type": "array",
+                "description": "Only quests newly given, updated, completed, or failed this turn — not the full quest log.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Short quest name, used as its key — keep it stable once set."},
+                        "status": {
+                            "type": "string",
+                            "enum": ["active", "completed", "failed"],
+                            "description": "Current status of this quest.",
+                        },
+                        "description": {"type": "string", "description": "One short sentence describing the goal."},
+                    },
+                    "required": ["title", "status"],
+                },
+            },
+        },
     },
 )
 
@@ -144,7 +220,7 @@ SET_ATTRIBUTES_FUNCTION = FunctionDeclaration(
     },
 )
 
-GAME_TOOLS = Tool(function_declarations=[UPDATE_STATE_FUNCTION, SET_ATTRIBUTES_FUNCTION])
+GAME_TOOLS = Tool(function_declarations=[UPDATE_STATE_FUNCTION, SET_ATTRIBUTES_FUNCTION, UPDATE_JOURNAL_FUNCTION])
 
 
 def _to_plain(value):
@@ -211,6 +287,14 @@ def _extract_attrs(response, text: str) -> dict:
     return tag_attrs or {}
 
 
+def _extract_journal(response) -> dict:
+    """The raw update_journal call args, if the model made one this turn —
+    always a plain dict with any of "location"/"npcs"/"quests" present, or
+    {} if nothing was reported. No legacy-tag fallback here: this is a new
+    feature with no old text-tag format to fall back to."""
+    return _extract_function_args(response, "update_journal") or {}
+
+
 # Marks a numbered option as requiring a dice roll, independent of narration
 # language (like the STATE tag, this literal token is always in English).
 ROLL_MARKER = "[ROLL]"
@@ -231,9 +315,10 @@ Follow these rules on every reply:
    "Respond in:" instruction found in the user's message. Never mix \
    languages. Exceptions, always kept literally in English regardless of \
    narration language: function/parameter names when you call \
-   update_character_state or set_character_attributes (rules 10-11) and \
-   the "[ROLL]" marker (rule 8). String VALUES you pass into those \
-   functions (item names, attribute labels) should be written in the \
+   update_character_state, set_character_attributes, or update_journal \
+   (rules 10-11-13) and the "[ROLL]" marker (rule 8). String VALUES you \
+   pass into those functions (item names, attribute labels, NPC names, \
+   quest titles/descriptions, location names) should be written in the \
    target language.
 
 2. NARRATIVE VOICE: Vary your prose. Do not open every sentence with the \
@@ -342,12 +427,14 @@ Follow these rules on every reply:
    - "money" is a short string label in the world's currency (e.g. "45" or \
      "45 credits" or "12 gold") — include it whenever the world/character \
      has an established currency; omit it only if truly not applicable yet.
-   - "inventory" is a lean list of short strings, one per notable item \
-     (e.g. "rusty sword", "health potion x2"). KEEP IT LEAN: at most about \
-     10 items. An item that is destroyed, broken beyond use, empty, or used \
-     up must be REMOVED from the list — never keep it with a label like \
+   - "inventory" is a lean list of {name, equipped} objects, one per \
+     notable item (e.g. {"name": "rusty sword", "equipped": true}, \
+     {"name": "health potion x2"}). KEEP IT LEAN: at most about 10 items. \
+     An item that is destroyed, broken beyond use, empty, or used up must \
+     be REMOVED from the list — never keep it with a label like \
      "(destroyed)" or "(empty)". Merge duplicates into one entry with a \
-     count ("energy cell x3"), and drop trivial junk. This pruning is \
+     count ("energy cell x3"), and drop trivial junk. Only set "equipped": \
+     true for something actively worn/wielded right now. This pruning is \
      allowed on any turn, even when nothing else about the item changed. \
      Keep it compact — it is resent to you every turn.
    Never omit "hp"/"max_hp". Call this function exactly once per reply, \
@@ -374,6 +461,25 @@ Follow these rules on every reply:
     genuine effort to include at least one non-violent approach (talk, \
     persuade, investigate, sneak, retreat, trade, search for another way) \
     whenever the scene allows it, instead of a menu of attack variants.
+
+13. SHARED JOURNAL: when this turn introduces or changes a notable location, \
+    NPC, or quest/goal, call update_journal to record ONLY what changed — \
+    never the whole known world. Specifically:
+    - Location: call it with {name, description} only on the turn the party \
+      actually arrives somewhere new and nameable. Don't re-report the same \
+      location turn after turn.
+    - NPCs: call it with an NPC entry only when a new named NPC is properly \
+      introduced, or an existing one's relationship to the party \
+      meaningfully shifts (e.g. from neutral to hostile, or they make a \
+      promise). Skip background/unnamed extras.
+    - Quests: call it with a quest entry when one is newly given (status \
+      "active"), meaningfully updated (keep "active", update the \
+      description), completed ("completed"), or abandoned/failed \
+      ("failed"). Keep each quest's "title" stable once set so it's \
+      recognized as the same quest later.
+    This function is entirely optional — most turns should NOT call it at \
+    all. You may call it alongside update_character_state in the same \
+    reply when both are warranted; never call it more than once per reply.
 """.format(roll_marker=ROLL_MARKER, attr_marker_open=ATTR_MARKER_OPEN, attr_marker_close=ATTR_MARKER_CLOSE)
 
 
@@ -569,7 +675,7 @@ async def generate_story_turn(
     category_hint: str | None = None,
     party_note: str | None = None,
     soften: bool = False,
-) -> tuple[str, dict]:
+) -> tuple[str, dict, dict]:
     context = build_context(summary, recent_turns, character)
     state_line = _state_line(character)
     genre_part = (
@@ -600,7 +706,8 @@ async def generate_story_turn(
     text = _extract_text(response)
     clean_text, _ = parse_state_tag(text)  # defensive: strip a stray legacy tag if one appears
     state = _extract_state(response, text)
-    return clean_text, state
+    journal = _extract_journal(response)
+    return clean_text, state, journal
 
 
 async def generate_world_preview(category_label: str, category_hint: str, language_name: str) -> str:
@@ -696,14 +803,16 @@ async def generate_party_opening(
     first_actor_attributes: list[str],
     language_name: str,
     soften: bool = False,
-) -> str:
+) -> tuple[str, dict]:
     """Generate the shared opening scene for a multiplayer room where every
     seated player's character already exists (each created individually via
     generate_character_sheet beforehand) — this call only writes the
     narrative that introduces the whole party together, plus the first set
-    of options. No state/attributes to report here since nobody's stats are
-    being established by this call — uses the plain (tool-less) model so
-    there's no function for it to call in the first place."""
+    of options. No character state/attributes to report here since nobody's
+    stats are being established by this call, but this is the right moment
+    to record the party's starting location (and an opening quest hook, if
+    one is given) via update_journal — the model is told not to call the
+    character-state functions here. Returns (text, journal)."""
     if world_description:
         world_part = f"World description: {world_description}"
     else:
@@ -718,7 +827,11 @@ async def generate_party_opening(
     prompt = (
         f"Respond in: {language_name}.\n\n"
         "Every character in this party already has their own stats from being created "
-        "individually — just write the opening scene and the numbered options, nothing else.\n\n"
+        "individually — do NOT call update_character_state or set_character_attributes in "
+        "this response. Just write the opening scene and the numbered options; you may "
+        "optionally call update_journal once to record the party's starting location "
+        "(required: every new adventure begins somewhere nameable) and, if the opening "
+        "naturally introduces one, a starting quest hook.\n\n"
         f"World category: {category_label} ({category_hint}).\n"
         f"{world_part}\n\n"
         "This adventure begins with a full party of player characters together in the same "
@@ -730,9 +843,11 @@ async def generate_party_opening(
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model(with_tools=False)
+    model = get_model(with_tools=True)
     response = await asyncio.to_thread(model.generate_content, prompt)
-    return _extract_text(response)
+    text = _extract_text(response)
+    journal = _extract_journal(response)
+    return text, journal
 
 
 async def generate_new_adventure_opening(
@@ -742,14 +857,14 @@ async def generate_new_adventure_opening(
     character_brief: str,
     language_name: str,
     soften: bool = False,
-) -> tuple[str, dict, dict]:
+) -> tuple[str, dict, dict, dict]:
     """Generate the opening scene for a brand-new adventure.
 
     category_label/category_hint come from world_categories.py.
     world_description is either the player's own text or None (Gemini invents one).
     character_brief is a ready-made instruction describing the character —
     either the player's own description or gender/age for random generation.
-    Returns (opening_text, state, attrs).
+    Returns (opening_text, state, attrs, journal).
     """
     if world_description:
         world_part = f"World description from the player: {world_description}"
@@ -766,7 +881,9 @@ async def generate_new_adventure_opening(
         "starting money in a currency that fits the world, and 2-4 starting inventory items. "
         "Reflect the money and inventory in the update_character_state call. Start at full "
         f"health: hp=max_hp={DEFAULT_HP} unless the character description implies a different "
-        "max HP, in which case use that.\n\n"
+        "max HP, in which case use that. Also call update_journal once to record the starting "
+        "location (required: every new adventure begins somewhere nameable), and, if the "
+        "opening naturally introduces one, a starting quest hook.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
         "with the character, then the list of action options."
     )
@@ -779,7 +896,8 @@ async def generate_new_adventure_opening(
     clean_text, _ = parse_attrs_tag(text_after_state)
     state = _extract_state(response, text)
     attrs = _extract_attrs(response, text)
-    return clean_text, state, attrs
+    journal = _extract_journal(response)
+    return clean_text, state, attrs, journal
 
 
 async def generate_summary(existing_summary: str, recent_turns: list[str], language_name: str) -> str:

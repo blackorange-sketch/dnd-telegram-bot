@@ -72,6 +72,13 @@ class RoomState:
     turn_order: list[int] = field(default_factory=list)  # user_ids, play order
     current_turn_index: int = 0
     started: bool = False  # False = still in the lobby, waiting for the host to start
+    # Journal: shared world-state facts for the whole party (see
+    # gemini_client.py's update_journal function) — unlike character state,
+    # these belong to the room, not any one seat.
+    location: dict | None = None  # {"name": ..., "description": ...} or None
+    visited_locations: list[str] = field(default_factory=list)
+    npcs: dict = field(default_factory=dict)  # name -> {"description": ..., "relationship": ...}
+    quests: dict = field(default_factory=dict)  # title -> {"status": ..., "description": ...}
 
     def current_turn_user_id(self) -> int | None:
         if not self.turn_order:
@@ -113,6 +120,10 @@ class RoomState:
             "turn_order": self.turn_order,
             "current_turn_index": self.current_turn_index,
             "started": self.started,
+            "location": self.location,
+            "visited_locations": self.visited_locations,
+            "npcs": self.npcs,
+            "quests": self.quests,
         })
 
     @classmethod
@@ -137,6 +148,10 @@ class RoomState:
             turn_order=data.get("turn_order", []),
             current_turn_index=data.get("current_turn_index", 0),
             started=data.get("started", False),
+            location=data.get("location"),
+            visited_locations=data.get("visited_locations", []),
+            npcs=data.get("npcs", {}),
+            quests=data.get("quests", {}),
         )
 
 

@@ -106,10 +106,78 @@ def _extract_number(value) -> float | None:
     return float(match.group()) if match else None
 
 
-def compute_changes(prev_hp, prev_money, prev_inventory: list[str], character: dict) -> dict:
+def normalize_inventory(items) -> list[dict]:
+    """Coerce an inventory list into the current {name, equipped} shape,
+    whether it comes fresh from a Gemini function call (already shaped this
+    way) or from an older save/legacy text-tag parse (a plain list of
+    strings). Drops anything without a usable name."""
+    normalized: list[dict] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            name = item.get("name")
+            if not name:
+                continue
+            normalized.append({"name": str(name), "equipped": bool(item.get("equipped", False))})
+        elif item:
+            normalized.append({"name": str(item), "equipped": False})
+    return normalized
+
+
+def apply_journal_update(target, journal: dict) -> None:
+    """Merge an update_journal function-call result into a GameState or
+    RoomState (both expose the same .location/.visited_locations/.npcs/
+    .quests attributes). Only the fields Gemini actually reported this turn
+    are touched — see gemini_client.py's SYSTEM_PROMPT rule 13, which tells
+    the model to omit anything that didn't change."""
+    if not journal:
+        return
+
+    location = journal.get("location")
+    if location and location.get("name"):
+        name = str(location["name"])
+        target.location = {"name": name, "description": str(location.get("description") or "")}
+        if name not in target.visited_locations:
+            target.visited_locations.append(name)
+
+    for npc in journal.get("npcs") or []:
+        name = npc.get("name") if isinstance(npc, dict) else None
+        if not name:
+            continue
+        existing = target.npcs.get(name, {})
+        target.npcs[name] = {
+            "description": npc.get("description", existing.get("description", "")),
+            "relationship": npc.get("relationship", existing.get("relationship", "")),
+        }
+
+    for quest in journal.get("quests") or []:
+        title = quest.get("title") if isinstance(quest, dict) else None
+        if not title:
+            continue
+        existing = target.quests.get(title, {})
+        target.quests[title] = {
+            "status": quest.get("status", existing.get("status", "active")),
+            "description": quest.get("description", existing.get("description", "")),
+        }
+
+
+def journal_payload(target) -> dict:
+    """Shape a GameState/RoomState's journal fields for the HTTP API /
+    frontend: dicts become name-keyed lists so the client doesn't need to
+    know the storage representation."""
+    return {
+        "location": target.location,
+        "visited_locations": target.visited_locations,
+        "npcs": [{"name": name, **info} for name, info in target.npcs.items()],
+        "quests": [{"title": title, **info} for title, info in target.quests.items()],
+    }
+
+
+def compute_changes(prev_hp, prev_money, prev_inventory: list[dict], character: dict) -> dict:
     """Diff the character's state before/after a turn into a compact
     {hp_delta, money_delta, inventory_added, inventory_removed} dict, so
-    the player can see at a glance what just changed."""
+    the player can see at a glance what just changed. prev_inventory and
+    the character's current inventory are both {name, equipped} dicts
+    (see normalize_inventory); items are compared by name."""
     changes: dict = {}
 
     new_hp = character.get("hp")
@@ -126,8 +194,10 @@ def compute_changes(prev_hp, prev_money, prev_inventory: list[str], character: d
         changes["money_note"] = new_money
 
     new_inventory = character.get("inventory") or []
-    added = [item for item in new_inventory if item not in prev_inventory]
-    removed = [item for item in prev_inventory if item not in new_inventory]
+    prev_names = {item["name"] for item in prev_inventory}
+    new_names = {item["name"] for item in new_inventory}
+    added = [item["name"] for item in new_inventory if item["name"] not in prev_names]
+    removed = [item["name"] for item in prev_inventory if item["name"] not in new_names]
     if added:
         changes["inventory_added"] = added
     if removed:
@@ -167,13 +237,13 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
 
     prev_hp = game.character.get("hp")
     prev_money = game.character.get("money")
-    prev_inventory = list(game.character.get("inventory") or [])
+    prev_inventory = normalize_inventory(game.character.get("inventory"))
 
     category_key = game.character.get("category")
     category_hint = wc.short_hint_for(category_key) if category_key else None
 
     try:
-        clean_text, parsed_state = await gemini_client.generate_story_turn(
+        clean_text, parsed_state, journal = await gemini_client.generate_story_turn(
             summary=game.summary,
             recent_turns=game.recent_turns,
             character=game.character,
@@ -185,7 +255,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     except gemini_client.ContentBlockedError:
         logger.warning("Turn blocked by safety filter, retrying once with a softened prompt")
         try:
-            clean_text, parsed_state = await gemini_client.generate_story_turn(
+            clean_text, parsed_state, journal = await gemini_client.generate_story_turn(
                 summary=game.summary,
                 recent_turns=game.recent_turns,
                 character=game.character,
@@ -202,7 +272,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
             # filter no matter what the player picks next. Last resort: drop
             # that raw history and lean on the compressed summary instead.
             logger.warning("Still blocked after softening; retrying once more without raw recent-turn history")
-            clean_text, parsed_state = await gemini_client.generate_story_turn(
+            clean_text, parsed_state, journal = await gemini_client.generate_story_turn(
                 summary=game.summary,
                 recent_turns=[],
                 character=game.character,
@@ -223,7 +293,9 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     if "money" in parsed_state:
         game.character["money"] = parsed_state["money"]
     if "inventory" in parsed_state:
-        game.character["inventory"] = parsed_state["inventory"]
+        game.character["inventory"] = normalize_inventory(parsed_state["inventory"])
+
+    apply_journal_update(game, journal)
 
     changes = compute_changes(prev_hp, prev_money, prev_inventory, game.character)
 
@@ -277,6 +349,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
         "log": game.full_log,
         "changes": changes,
         "changes_line": format_changes_line(changes),
+        "journal": journal_payload(game),
     }
 
 
@@ -320,7 +393,7 @@ async def create_adventure(
     character_brief, character_record = build_character_brief(character_description, gender, age)
 
     try:
-        clean_text, parsed_state, attrs = await gemini_client.generate_new_adventure_opening(
+        clean_text, parsed_state, attrs, journal = await gemini_client.generate_new_adventure_opening(
             category_label=wc.label_for(category_key, language_key),
             category_hint=wc.hint_for(category_key),
             world_description=world_description,
@@ -329,7 +402,7 @@ async def create_adventure(
         )
     except gemini_client.ContentBlockedError:
         logger.warning("Opening blocked by safety filter, retrying once with a softened prompt")
-        clean_text, parsed_state, attrs = await gemini_client.generate_new_adventure_opening(
+        clean_text, parsed_state, attrs, journal = await gemini_client.generate_new_adventure_opening(
             category_label=wc.label_for(category_key, language_key),
             category_hint=wc.hint_for(category_key),
             world_description=world_description,
@@ -348,13 +421,14 @@ async def create_adventure(
     if "money" in parsed_state:
         character_record["money"] = parsed_state["money"]
     if "inventory" in parsed_state:
-        character_record["inventory"] = parsed_state["inventory"]
+        character_record["inventory"] = normalize_inventory(parsed_state["inventory"])
     if attrs:
         character_record["attributes"] = attrs
 
     display_text, options = format_options(clean_text, language_key)
 
     game = GameState(user_id=user_id, character=character_record, language=language_key)
+    apply_journal_update(game, journal)
     game.add_turn(f"[DM]: {display_text}")
     game.pending_options = options
     save_state(game)
@@ -365,6 +439,7 @@ async def create_adventure(
         "character": game.character,
         "defeated": False,
         "log": game.full_log,
+        "journal": journal_payload(game),
     }
 
 
