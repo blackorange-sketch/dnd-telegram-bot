@@ -95,7 +95,7 @@ def compute_roll(game: GameState, sides: int = 20, attribute: str | None = None)
 def roll_action_text(roll_info: dict) -> str:
     """The English, language-independent action text fed to Gemini to
     describe a roll that already happened (see gemini_client's tier rules)."""
-    extra = f", modifier {roll_info['modifier']:+d} from {roll_info['attribute']}" if roll_info.get("attribute") else ""
+    extra = f", modifier {int(roll_info['modifier']):+d} from {roll_info['attribute']}" if roll_info.get("attribute") else ""
     return f"roll result: {roll_info['tier']} (natural {roll_info['value']}, total {roll_info['total']}{extra})"
 
 
@@ -212,7 +212,7 @@ def format_changes_line(changes: dict) -> str:
     parts = []
     hp_delta = changes.get("hp_delta")
     if hp_delta:
-        parts.append(f"❤️ {hp_delta:+d}")
+        parts.append(f"❤️ {int(hp_delta):+d}")
     money_delta = changes.get("money_delta")
     if money_delta:
         parts.append(f"💰 {money_delta:+g}")
@@ -286,10 +286,11 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     if "hp" in parsed_state:
         # max_hp shouldn't drift turn to turn — lock it once set, so a
         # model slip can't silently reset the character's max health.
+        hp_val = int(parsed_state["hp"])
         if not game.character.get("max_hp"):
-            game.character["max_hp"] = parsed_state.get("max_hp")
-        max_hp = game.character.get("max_hp") or parsed_state["hp"]
-        game.character["hp"] = max(0, min(parsed_state["hp"], max_hp))
+            game.character["max_hp"] = int(parsed_state.get("max_hp") or hp_val)
+        max_hp = int(game.character.get("max_hp") or hp_val)
+        game.character["hp"] = max(0, min(hp_val, max_hp))
     if "money" in parsed_state:
         game.character["money"] = parsed_state["money"]
     if "inventory" in parsed_state:
@@ -411,8 +412,8 @@ async def create_adventure(
             soften=True,
         )
 
-    hp = parsed_state.get("hp", gemini_client.DEFAULT_HP)
-    max_hp = parsed_state.get("max_hp", gemini_client.DEFAULT_HP)
+    hp = int(parsed_state.get("hp", gemini_client.DEFAULT_HP))
+    max_hp = int(parsed_state.get("max_hp", gemini_client.DEFAULT_HP))
 
     character_record["category"] = category_key
     character_record["world_description"] = world_description

@@ -51,6 +51,7 @@ def _extract_text(response) -> str:
     except (AttributeError, IndexError):
         parts = []
     text = "".join(getattr(part, "text", None) or "" for part in parts)
+    text = FAKE_FUNCTION_CALL_RE.sub("", text)
     return text.strip()
 
 # Matches the "[STATE]{"hp":18,"max_hp":30,...}[/STATE]" JSON block the model
@@ -305,6 +306,12 @@ ATTR_MARKER_OPEN = "[ATTR:"
 ATTR_MARKER_CLOSE = "]"
 ATTR_MARKER_RE = re.compile(r"\[ATTR:([^\]]+)\]")
 
+# Strip fake "function call" text the model sometimes writes instead of a real tool call
+FAKE_FUNCTION_CALL_RE = re.compile(
+    r"(?:^|\n)\s*(?:update_character_state|set_character_attributes|update_journal)\s*\([^)]*\)\s*",
+    re.MULTILINE | re.IGNORECASE,
+)
+
 SYSTEM_PROMPT = """\
 You are an experienced, vivid Dungeon Master running an interactive text \
 RPG adventure.
@@ -415,7 +422,11 @@ Follow these rules on every reply:
    options, call the update_character_state function exactly once, as the \
    very last thing you do — do NOT describe, mention, or type out hp, \
    max_hp, money, or inventory anywhere in the narration text itself, they \
-   only ever go into that function call.
+   only ever go into that function call. You MUST use the real tool/function \
+   call mechanism — NEVER write the function name or its arguments as plain \
+   text in your reply (for example, never output a line like \
+   "update_character_state(hp=30, max_hp=30, ...)"). The function call is a \
+   separate structured action, not part of the narration.
    - Before calling it, check the "CURRENT STATE" given to you in the \
      prompt (when present) — it is the ground truth going into this turn. \
      Copy each value forward EXACTLY as given unless something in THIS \
@@ -510,6 +521,11 @@ def get_model(with_tools: bool = True):
                 system_instruction=SYSTEM_PROMPT,
                 safety_settings=SAFETY_SETTINGS,
                 tools=[GAME_TOOLS],
+                tool_config={
+                    "function_calling_config": {
+                        "mode": "AUTO",
+                    }
+                },
             )
         return _model
     if _model_plain is None:
