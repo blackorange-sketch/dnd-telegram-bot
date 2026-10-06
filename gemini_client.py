@@ -429,15 +429,19 @@ Follow these rules on every reply:
    the tension and atmosphere, then transition past the explicit act itself \
    ("fade to black") rather than describing it graphically.
 
-10. STATE FUNCTION: after you finish writing your narration and numbered \
-   options, call the update_character_state function exactly once, as the \
-   very last thing you do — do NOT describe, mention, or type out hp, \
-   max_hp, money, or inventory anywhere in the narration text itself, they \
-   only ever go into that function call. You MUST use the real tool/function \
-   call mechanism — NEVER write the function name or its arguments as plain \
-   text in your reply (for example, never output a line like \
-   "update_character_state(hp=30, max_hp=30, ...)"). The function call is a \
-   separate structured action, not part of the narration.
+10. STATE FUNCTION: your reply ALWAYS has TWO separate parts, BOTH required, \
+   every single time: (a) the normal narration text plus numbered options \
+   (rules 4 and 8), and (b) a real update_character_state function/tool \
+   call. Part (b) never replaces part (a) — writing only a function call \
+   with no narration text, or only narration with no function call, is \
+   always wrong. Do NOT describe, mention, or type out hp, max_hp, money, \
+   or inventory anywhere in the narration text itself — they only go into \
+   the function call — but the narration and options text itself must \
+   still be written in full, as normal. Use the real tool/function call \
+   mechanism for part (b) — NEVER write the function name or its arguments \
+   as plain text in your reply (for example, never output a line like \
+   "update_character_state(hp=30, max_hp=30, ...)"); that text would not \
+   count as calling the function at all.
    - Before calling it, check the "CURRENT STATE" given to you in the \
      prompt (when present) — it is the ground truth going into this turn. \
      Copy each value forward EXACTLY as given unless something in THIS \
@@ -692,6 +696,35 @@ SOFTEN_NOTE = (
     "still meaningfully advancing the story and following all other rules."
 )
 
+NARRATION_REQUIRED_NOTE = (
+    "IMPORTANT: your previous attempt at this exact turn came back with a function call but "
+    "NO narration text (or no numbered options) at all — as if the function call had replaced "
+    "the normal reply instead of coming alongside it. That is never correct. Write the full "
+    "reply again from scratch: the normal narration and numbered options as plain text, "
+    "AND the required function call(s) — both parts, every time."
+)
+
+
+async def _generate_ensuring_narration(model, prompt: str):
+    """Call the model and, if the reply comes back with a function call but
+    literally no narration text at all — a failure mode where the model
+    seems to treat "use the real function call" as "don't write anything
+    else" — retry once with an explicit reminder that narration text is
+    mandatory alongside any function call. Transparent to the caller: always
+    returns a response object, just like a plain generate_content call
+    would, so nothing downstream needs to change."""
+    response = await asyncio.to_thread(model.generate_content, prompt)
+    if _extract_text(response).strip():
+        return response
+    logger.warning(
+        "Gemini reply had no narration text at all (function call(s) only?) — "
+        "retrying once with an explicit reminder"
+    )
+    response = await asyncio.to_thread(model.generate_content, prompt + f"\n\n{NARRATION_REQUIRED_NOTE}")
+    if not _extract_text(response).strip():
+        logger.error("Gemini still returned no narration text after the retry; proceeding with whatever came back")
+    return response
+
 
 async def generate_story_turn(
     summary: str,
@@ -729,7 +762,7 @@ async def generate_story_turn(
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
     model = get_model(with_tools=True)
-    response = await asyncio.to_thread(model.generate_content, prompt)
+    response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     clean_text, _ = parse_state_tag(text)  # defensive: strip a stray legacy tag if one appears
     state = _extract_state(response, text)
@@ -812,7 +845,7 @@ async def generate_character_sheet(
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
     model = get_model(with_tools=True)
-    response = await asyncio.to_thread(model.generate_content, prompt)
+    response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     text_after_state, _ = parse_state_tag(text)
     clean_text, _ = parse_attrs_tag(text_after_state)
@@ -871,7 +904,7 @@ async def generate_party_opening(
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
     model = get_model(with_tools=True)
-    response = await asyncio.to_thread(model.generate_content, prompt)
+    response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     journal = _extract_journal(response)
     return text, journal
@@ -917,7 +950,7 @@ async def generate_new_adventure_opening(
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
     model = get_model(with_tools=True)
-    response = await asyncio.to_thread(model.generate_content, prompt)
+    response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     text_after_state, _ = parse_state_tag(text)
     clean_text, _ = parse_attrs_tag(text_after_state)
