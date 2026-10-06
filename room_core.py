@@ -92,7 +92,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
     prev_inventory = list(seat.character.get("inventory") or [])
 
     try:
-        story_text = await gemini_client.generate_story_turn(
+        clean_text, parsed_state = await gemini_client.generate_story_turn(
             summary=room.summary,
             recent_turns=room.recent_turns,
             character=seat.character,
@@ -105,7 +105,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
     except gemini_client.ContentBlockedError:
         logger.warning("Room turn blocked by safety filter, retrying once with a softened prompt")
         try:
-            story_text = await gemini_client.generate_story_turn(
+            clean_text, parsed_state = await gemini_client.generate_story_turn(
                 summary=room.summary,
                 recent_turns=room.recent_turns,
                 character=seat.character,
@@ -118,7 +118,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
             used_last_resort = False
         except gemini_client.ContentBlockedError:
             logger.warning("Still blocked after softening; retrying once more without raw recent-turn history")
-            story_text = await gemini_client.generate_story_turn(
+            clean_text, parsed_state = await gemini_client.generate_story_turn(
                 summary=room.summary,
                 recent_turns=[],
                 character=seat.character,
@@ -130,7 +130,6 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
             )
             used_last_resort = True
 
-    clean_text, parsed_state = gemini_client.parse_state_tag(story_text)
     if "hp" in parsed_state:
         if not seat.character.get("max_hp"):
             seat.character["max_hp"] = parsed_state.get("max_hp")
@@ -194,7 +193,7 @@ async def create_character_for_seat(
         )
 
     try:
-        sheet = await gemini_client.generate_character_sheet(
+        description_text, parsed_state, attrs = await gemini_client.generate_character_sheet(
             character_brief=character_brief,
             world_description=room.world_description,
             category_hint=wc.hint_for(room.category),
@@ -202,7 +201,7 @@ async def create_character_for_seat(
         )
     except gemini_client.ContentBlockedError:
         logger.warning("Character sheet generation blocked by safety filter, retrying once softened")
-        sheet = await gemini_client.generate_character_sheet(
+        description_text, parsed_state, attrs = await gemini_client.generate_character_sheet(
             character_brief=character_brief,
             world_description=room.world_description,
             category_hint=wc.hint_for(room.category),
@@ -210,8 +209,6 @@ async def create_character_for_seat(
             soften=True,
         )
 
-    text_after_state, parsed_state = gemini_client.parse_state_tag(sheet)
-    description_text, attrs = gemini_client.parse_attrs_tag(text_after_state)
     hp = parsed_state.get("hp", gemini_client.DEFAULT_HP)
     max_hp = parsed_state.get("max_hp", gemini_client.DEFAULT_HP)
 

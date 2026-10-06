@@ -12,7 +12,7 @@ import os
 import re
 
 import google.generativeai as genai
-from google.generativeai.types import HarmBlockThreshold, HarmCategory
+from google.generativeai.types import FunctionDeclaration, HarmBlockThreshold, HarmCategory, Tool
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,17 @@ def _extract_text(response) -> str:
     if not response.candidates:
         reason = getattr(getattr(response, "prompt_feedback", None), "block_reason", "unknown")
         raise ContentBlockedError(f"Response blocked by Gemini's safety filter (reason: {reason})")
-    return response.text.strip()
+    # Built by hand instead of the response.text shortcut: with tools attached,
+    # a candidate can legitimately contain a mix of text parts and function-
+    # call parts (or, rarely, a function call with no text part at all), and
+    # response.text raises in that last case instead of just giving back
+    # whatever text there is.
+    try:
+        parts = response.candidates[0].content.parts
+    except (AttributeError, IndexError):
+        parts = []
+    text = "".join(getattr(part, "text", None) or "" for part in parts)
+    return text.strip()
 
 # Matches the "[STATE]{"hp":18,"max_hp":30,...}[/STATE]" JSON block the model
 # is instructed to append. Deliberately NOT anchored to the end of the text:
@@ -61,6 +71,146 @@ DANGLING_TAG_RE = re.compile(
     r"\[STATE\](?!.*\[/STATE\]).*$|\[ATTRS\](?!.*\[/ATTRS\]).*$", re.DOTALL
 )
 
+# --- Structured state via Gemini function calling -------------------------
+#
+# Replaces the old approach of asking the model to type out a [STATE]{...}
+# [/STATE] JSON blob in plain text, which a regex then had to fish back out.
+# The model instead calls these functions directly; the SDK hands back
+# already-structured arguments, so there's no "the model almost got the JSON
+# right" failure mode. The old tag-parsing functions (parse_state_tag/
+# parse_attrs_tag below) are kept as a defensive fallback — the model isn't
+# instructed to use tags anymore, but if an older-style tag ever slips into
+# the text anyway, it still gets stripped and read correctly.
+
+UPDATE_STATE_FUNCTION = FunctionDeclaration(
+    name="update_character_state",
+    description=(
+        "Report the acting character's hp/max_hp/money/inventory as they "
+        "stand at the end of THIS turn. Call this exactly once, as the "
+        "very last thing you do — never describe this in the narration "
+        "text itself. Copy each value forward from the CURRENT STATE given "
+        "to you unless something in this specific turn actually changed it."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "hp": {"type": "integer", "description": "Current HP after this turn."},
+            "max_hp": {"type": "integer", "description": "Max HP — rarely changes turn to turn."},
+            "money": {
+                "type": "string",
+                "description": "Short label in the world's currency, e.g. '45 gold' or '12 credits'.",
+            },
+            "inventory": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Lean list of notable items (at most ~10). Merge duplicates with a count "
+                    "('energy cell x3'); drop anything destroyed, used up, or trivial."
+                ),
+            },
+        },
+        "required": ["hp", "max_hp"],
+    },
+)
+
+SET_ATTRIBUTES_FUNCTION = FunctionDeclaration(
+    name="set_character_attributes",
+    description=(
+        "Set a brand-new character's attributes. Call this exactly once, "
+        "ONLY when the prompt explicitly says this character is being "
+        "created right now — never on an ordinary story turn."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "attributes": {
+                "type": "array",
+                "description": (
+                    "4-5 short attribute labels in the target language that fit the world and "
+                    "character (e.g. physical strength, intellect, agility, willpower — whatever "
+                    "suits the setting), each valued 1-10."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "value": {"type": "integer"},
+                    },
+                    "required": ["label", "value"],
+                },
+            },
+        },
+        "required": ["attributes"],
+    },
+)
+
+GAME_TOOLS = Tool(function_declarations=[UPDATE_STATE_FUNCTION, SET_ATTRIBUTES_FUNCTION])
+
+
+def _to_plain(value):
+    """Recursively convert a Gemini function-call argument (a proto
+    Struct/MapComposite/RepeatedComposite under the hood) into plain
+    Python dict/list/scalar values."""
+    if hasattr(value, "items"):
+        return {k: _to_plain(v) for k, v in value.items()}
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "__iter__"):
+        return [_to_plain(v) for v in value]
+    return value
+
+
+def _extract_function_args(response, name: str) -> dict | None:
+    """Pull the arguments of a named function call out of a response, if the
+    model made one this turn. Returns None if it didn't."""
+    if not response.candidates:
+        return None
+    try:
+        parts = response.candidates[0].content.parts
+    except (AttributeError, IndexError):
+        return None
+    for part in parts:
+        fn = getattr(part, "function_call", None)
+        if fn and fn.name == name:
+            return _to_plain(fn.args)
+    return None
+
+
+def _attrs_list_to_dict(attrs_args: dict | None) -> dict:
+    """set_character_attributes gives {"attributes": [{"label":..,"value":..}, ...]}
+    — convert that back into the plain {label: value} shape used everywhere
+    else in the codebase (character_record["attributes"], the frontend, etc)."""
+    if not attrs_args:
+        return {}
+    result = {}
+    for item in attrs_args.get("attributes") or []:
+        label = item.get("label") if isinstance(item, dict) else None
+        value = item.get("value") if isinstance(item, dict) else None
+        if label is not None and value is not None:
+            result[str(label)] = value
+    return result
+
+
+def _extract_state(response, text: str) -> dict:
+    """The function-call result is authoritative; a legacy [STATE] text tag
+    (which the model is no longer instructed to write) is only consulted if
+    no function call was made, so an old-style reply still works."""
+    state = _extract_function_args(response, "update_character_state")
+    if state:
+        return state
+    _, tag_state = parse_state_tag(text)
+    return tag_state
+
+
+def _extract_attrs(response, text: str) -> dict:
+    attrs_args = _extract_function_args(response, "set_character_attributes")
+    attrs = _attrs_list_to_dict(attrs_args)
+    if attrs:
+        return attrs
+    _, tag_attrs = parse_attrs_tag(text)
+    return tag_attrs or {}
+
+
 # Marks a numbered option as requiring a dice roll, independent of narration
 # language (like the STATE tag, this literal token is always in English).
 ROLL_MARKER = "[ROLL]"
@@ -79,11 +229,12 @@ Follow these rules on every reply:
 
 1. LANGUAGE: Always write your entire reply in the language given by the \
    "Respond in:" instruction found in the user's message. Never mix \
-   languages. Two exceptions, always kept literally in English regardless \
-   of narration language: the JSON keys inside the "[STATE]...[/STATE]" and \
-   "[ATTRS]...[/ATTRS]" tags (rules 10-11) and the "[ROLL]" marker (rule 8). \
-   String VALUES inside those JSON tags (item names, attribute labels) \
-   should be written in the target language.
+   languages. Exceptions, always kept literally in English regardless of \
+   narration language: function/parameter names when you call \
+   update_character_state or set_character_attributes (rules 10-11) and \
+   the "[ROLL]" marker (rule 8). String VALUES you pass into those \
+   functions (item names, attribute labels) should be written in the \
+   target language.
 
 2. NARRATIVE VOICE: Vary your prose. Do not open every sentence with the \
    same second-person pronoun ("you"/"ти"/"ty" etc.) — use the grammar of \
@@ -175,11 +326,12 @@ Follow these rules on every reply:
    the tension and atmosphere, then transition past the explicit act itself \
    ("fade to black") rather than describing it graphically.
 
-10. STATE TAG: the VERY LAST LINE of your reply must always be exactly one \
-   tag in this exact form — a single line, valid JSON, English keys, no \
-   trailing commas, no comments:
-   [STATE]{{"hp": current, "max_hp": max, "money": "amount label", "inventory": ["item", "item"]}}[/STATE]
-   - Before writing it, check the "CURRENT STATE" given to you in the \
+10. STATE FUNCTION: after you finish writing your narration and numbered \
+   options, call the update_character_state function exactly once, as the \
+   very last thing you do — do NOT describe, mention, or type out hp, \
+   max_hp, money, or inventory anywhere in the narration text itself, they \
+   only ever go into that function call.
+   - Before calling it, check the "CURRENT STATE" given to you in the \
      prompt (when present) — it is the ground truth going into this turn. \
      Copy each value forward EXACTLY as given unless something in THIS \
      specific turn changed it (damage, healing, a purchase, a find, using \
@@ -189,29 +341,27 @@ Follow these rules on every reply:
    - "hp" and "max_hp" are mandatory integers.
    - "money" is a short string label in the world's currency (e.g. "45" or \
      "45 credits" or "12 gold") — include it whenever the world/character \
-     has an established currency; omit the key only if truly not \
-     applicable yet.
-   - "inventory" is a JSON array of short strings, one per notable item \
+     has an established currency; omit it only if truly not applicable yet.
+   - "inventory" is a lean list of short strings, one per notable item \
      (e.g. "rusty sword", "health potion x2"). KEEP IT LEAN: at most about \
      10 items. An item that is destroyed, broken beyond use, empty, or used \
      up must be REMOVED from the list — never keep it with a label like \
      "(destroyed)" or "(empty)". Merge duplicates into one entry with a \
      count ("energy cell x3"), and drop trivial junk. This pruning is \
      allowed on any turn, even when nothing else about the item changed. \
-     The tag itself must stay compact — it is resent to you every turn.
-   Never omit "hp"/"max_hp". Never explain this tag. Never put anything \
-   after it.
+     Keep it compact — it is resent to you every turn.
+   Never omit "hp"/"max_hp". Call this function exactly once per reply, \
+   never more.
 
-11. ATTRS TAG (new characters only): if — and only if — the prompt \
-    explicitly tells you this is a brand-new character being created, also \
-    output one more JSON tag placed right before the STATE tag (same line \
-    format rules apply):
-    [ATTRS]{{"Label": value, "Label": value}}[/ATTRS]
-    Pick 4-5 short attribute labels in the target language that fit the \
-    world and character (e.g. physical strength, intellect, agility, \
-    willpower — whatever suits the setting), each an integer from 1 to 10. \
-    Never output this tag on ordinary story turns — attributes are set \
-    once at character creation and stay fixed afterward.
+11. ATTRIBUTES FUNCTION (new characters only): if — and only if — the \
+    prompt explicitly tells you this is a brand-new character being \
+    created, also call set_character_attributes exactly once (in addition \
+    to update_character_state). Pick 4-5 short attribute labels in the \
+    target language that fit the world and character (e.g. physical \
+    strength, intellect, agility, willpower — whatever suits the setting), \
+    each valued 1-10. Never call this on an ordinary story turn — \
+    attributes are set once at character creation and stay fixed \
+    afterward.
 
 12. SCENE VARIETY: combat is one tool among several, not the default outcome \
     of a turn. Most of the adventure should move forward through exploration, \
@@ -235,18 +385,35 @@ def _configure():
 
 
 _model = None
+_model_plain = None
 
 
-def get_model():
-    global _model
-    if _model is None:
+def get_model(with_tools: bool = True):
+    """Two cached model instances: one with the state/attributes functions
+    attached (story turns, character creation — anything that needs to
+    report hp/money/inventory/attributes), and a plain one with no tools at
+    all for purely narrative calls (summary, epilogue, previews, the party
+    opening) so the model has no way to call a function there even if it
+    wanted to."""
+    global _model, _model_plain
+    if with_tools:
+        if _model is None:
+            _configure()
+            _model = genai.GenerativeModel(
+                model_name=GEMINI_MODEL,
+                system_instruction=SYSTEM_PROMPT,
+                safety_settings=SAFETY_SETTINGS,
+                tools=[GAME_TOOLS],
+            )
+        return _model
+    if _model_plain is None:
         _configure()
-        _model = genai.GenerativeModel(
+        _model_plain = genai.GenerativeModel(
             model_name=GEMINI_MODEL,
             system_instruction=SYSTEM_PROMPT,
             safety_settings=SAFETY_SETTINGS,
         )
-    return _model
+    return _model_plain
 
 
 def _clean_after_tag_removal(text: str) -> str:
@@ -402,7 +569,7 @@ async def generate_story_turn(
     category_hint: str | None = None,
     party_note: str | None = None,
     soften: bool = False,
-) -> str:
+) -> tuple[str, dict]:
     context = build_context(summary, recent_turns, character)
     state_line = _state_line(character)
     genre_part = (
@@ -412,8 +579,8 @@ async def generate_story_turn(
     )
     party_part = (
         f"PARTY (multiplayer — this is a shared adventure; acknowledge the other party members "
-        f"as present/reacting where natural, but this turn's action and STATE tag belong only to "
-        f"the acting player named below): {party_note}\n\n"
+        f"as present/reacting where natural, but this turn's action and state update belong only "
+        f"to the acting player named below): {party_note}\n\n"
         if party_note else ""
     )
     prompt = (
@@ -422,28 +589,31 @@ async def generate_story_turn(
         f"{party_part}"
         f"{context}\n\n"
         f"CURRENT STATE (ground truth going into this turn — copy these exact values into "
-        f"your closing [STATE:...] tag unless something in THIS turn explicitly changes them; "
-        f"never invent or reset them): {state_line}\n\n"
+        f"your update_character_state call unless something in THIS turn explicitly changes "
+        f"them; never invent or reset them): {state_line}\n\n"
         f"Player's action now: {player_input}"
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model()
+    model = get_model(with_tools=True)
     response = await asyncio.to_thread(model.generate_content, prompt)
-    return _extract_text(response)
+    text = _extract_text(response)
+    clean_text, _ = parse_state_tag(text)  # defensive: strip a stray legacy tag if one appears
+    state = _extract_state(response, text)
+    return clean_text, state
 
 
 async def generate_world_preview(category_label: str, category_hint: str, language_name: str) -> str:
     """A short, standalone world concept the player can accept or reroll —
-    not part of the actual adventure yet, so no STATE tag or options here."""
+    not part of the actual adventure yet, so no state/options here."""
     prompt = (
         f"Respond in: {language_name}.\n\n"
-        "For THIS response only, ignore the closing STATE tag rule and the numbered-options "
-        "rule — just answer with the requested text and nothing else.\n\n"
+        "For THIS response only, ignore the numbered-options rule — just answer with the "
+        "requested text and nothing else.\n\n"
         f"Propose a short, evocative world concept (3-5 sentences) for a {category_label} "
         f"({category_hint}) adventure. Give it a distinct hook or twist so it doesn't feel generic."
     )
-    model = get_model()
+    model = get_model(with_tools=False)
     response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)
 
@@ -460,14 +630,14 @@ async def generate_character_preview(
     world_part = f"World: {world_description}" if world_description else f"World category hint: {category_hint}"
     prompt = (
         f"Respond in: {language_name}.\n\n"
-        "For THIS response only, ignore the closing STATE tag rule and the numbered-options "
-        "rule — just answer with the requested text and nothing else.\n\n"
+        "For THIS response only, ignore the numbered-options rule — just answer with the "
+        "requested text and nothing else.\n\n"
         f"{world_part}\n\n"
         f"Propose a short character concept (3-5 sentences) fitting this world: gender — "
         f"{gender}, age — {age}. Include a name, class/profession, one notable trait, and a "
         "one-line backstory hook."
     )
-    model = get_model()
+    model = get_model(with_tools=False)
     response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)
 
@@ -478,13 +648,14 @@ async def generate_character_sheet(
     category_hint: str,
     language_name: str,
     soften: bool = False,
-) -> str:
-    """Generate a standalone character sheet (short write-up + ATTRS + STATE
-    tags, no narrative scene or options) for a multiplayer party member who
-    is NOT getting their own opening scene — used when a room is created
-    (the host) and whenever someone joins a room, whether still in the lobby
-    or into an already-started game. Keeps every seat's stats independent of
-    whatever the shared opening scene ends up saying."""
+) -> tuple[str, dict, dict]:
+    """Generate a standalone character sheet (short write-up, plus a
+    set_character_attributes + update_character_state function call) for a
+    multiplayer party member who is NOT getting their own opening scene —
+    used when a room is created (the host) and whenever someone joins a
+    room, whether still in the lobby or into an already-started game. Keeps
+    every seat's stats independent of whatever the shared opening scene
+    ends up saying. Returns (description_text, state, attrs)."""
     if world_description:
         world_part = f"World description: {world_description}"
     else:
@@ -493,23 +664,27 @@ async def generate_character_sheet(
     prompt = (
         f"Respond in: {language_name}.\n\n"
         "For THIS response only, ignore the numbered-options rule — do not produce any "
-        "numbered options, just the short character write-up followed by the tags.\n\n"
+        "numbered options, just the short character write-up, then the two function calls.\n\n"
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
         "THIS IS A NEW CHARACTER BEING CREATED for a multiplayer party — write a short "
         "(2-4 sentence) introduction of this character fitting the world, then invent, "
         "fitting the world and character: 4-5 short physical/mental attributes (see rule "
-        "11, the ATTRS tag), some starting money in a currency that fits the world, and "
-        "2-4 starting inventory items. Reflect the money and inventory in the closing "
-        f"STATE tag, and the attributes in the ATTRS tag placed right before it. Start at "
-        f"full health: hp=max_hp={DEFAULT_HP} unless the description implies a different "
-        "max HP, in which case use that."
+        "11, set_character_attributes), some starting money in a currency that fits the "
+        "world, and 2-4 starting inventory items. Reflect the money and inventory in the "
+        f"update_character_state call. Start at full health: hp=max_hp={DEFAULT_HP} unless "
+        "the description implies a different max HP, in which case use that."
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model()
+    model = get_model(with_tools=True)
     response = await asyncio.to_thread(model.generate_content, prompt)
-    return _extract_text(response)
+    text = _extract_text(response)
+    text_after_state, _ = parse_state_tag(text)
+    clean_text, _ = parse_attrs_tag(text_after_state)
+    state = _extract_state(response, text)
+    attrs = _extract_attrs(response, text)
+    return clean_text, state, attrs
 
 
 async def generate_party_opening(
@@ -526,8 +701,9 @@ async def generate_party_opening(
     seated player's character already exists (each created individually via
     generate_character_sheet beforehand) — this call only writes the
     narrative that introduces the whole party together, plus the first set
-    of options. No STATE/ATTRS tags are needed here since nobody's stats are
-    being established by this call."""
+    of options. No state/attributes to report here since nobody's stats are
+    being established by this call — uses the plain (tool-less) model so
+    there's no function for it to call in the first place."""
     if world_description:
         world_part = f"World description: {world_description}"
     else:
@@ -541,9 +717,8 @@ async def generate_party_opening(
 
     prompt = (
         f"Respond in: {language_name}.\n\n"
-        "For THIS response only, ignore the closing STATE/ATTRS tag rules — every character "
-        "in this party already has their own stats from being created individually; just "
-        "write the opening scene and the numbered options, nothing else.\n\n"
+        "Every character in this party already has their own stats from being created "
+        "individually — just write the opening scene and the numbered options, nothing else.\n\n"
         f"World category: {category_label} ({category_hint}).\n"
         f"{world_part}\n\n"
         "This adventure begins with a full party of player characters together in the same "
@@ -555,7 +730,7 @@ async def generate_party_opening(
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model()
+    model = get_model(with_tools=False)
     response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)
 
@@ -567,13 +742,14 @@ async def generate_new_adventure_opening(
     character_brief: str,
     language_name: str,
     soften: bool = False,
-) -> str:
+) -> tuple[str, dict, dict]:
     """Generate the opening scene for a brand-new adventure.
 
     category_label/category_hint come from world_categories.py.
     world_description is either the player's own text or None (Gemini invents one).
     character_brief is a ready-made instruction describing the character —
     either the player's own description or gender/age for random generation.
+    Returns (opening_text, state, attrs).
     """
     if world_description:
         world_part = f"World description from the player: {world_description}"
@@ -586,19 +762,24 @@ async def generate_new_adventure_opening(
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
         "THIS IS A NEW CHARACTER BEING CREATED — also invent, fitting the world and character: "
-        "4-5 short physical/mental attributes (see rule 11, the ATTRS tag), some starting money "
-        "in a currency that fits the world, and 2-4 starting inventory items. Reflect the money "
-        f"and inventory in the closing STATE tag, and the attributes in the ATTRS tag placed "
-        f"right before it. Start at full health: hp=max_hp={DEFAULT_HP} unless the character "
-        "description implies a different max HP, in which case use that.\n\n"
+        "4-5 short physical/mental attributes (see rule 11, set_character_attributes), some "
+        "starting money in a currency that fits the world, and 2-4 starting inventory items. "
+        "Reflect the money and inventory in the update_character_state call. Start at full "
+        f"health: hp=max_hp={DEFAULT_HP} unless the character description implies a different "
+        "max HP, in which case use that.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
         "with the character, then the list of action options."
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model()
+    model = get_model(with_tools=True)
     response = await asyncio.to_thread(model.generate_content, prompt)
-    return _extract_text(response)
+    text = _extract_text(response)
+    text_after_state, _ = parse_state_tag(text)
+    clean_text, _ = parse_attrs_tag(text_after_state)
+    state = _extract_state(response, text)
+    attrs = _extract_attrs(response, text)
+    return clean_text, state, attrs
 
 
 async def generate_summary(existing_summary: str, recent_turns: list[str], language_name: str) -> str:
@@ -616,7 +797,7 @@ async def generate_summary(existing_summary: str, recent_turns: list[str], langu
         f"Previous summary: {existing_summary or '(none yet)'}\n\n"
         "Recent events:\n" + "\n".join(recent_turns)
     )
-    model = get_model()
+    model = get_model(with_tools=False)
     response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)
 
@@ -632,8 +813,8 @@ async def generate_epilogue(
 ) -> str:
     """A short (4-7 sentence) closing passage for a character's story —
     either because they were defeated, or because the player chose to stop
-    here. No options, no STATE/ATTRS tags; this is the last thing shown for
-    this character before their save is deleted."""
+    here. No options, no state/attributes calls; this is the last thing
+    shown for this character before their save is deleted."""
     history_block = f"Story so far (summary): {summary}\n" if summary else ""
     if recent_turns:
         history_block += "Most recent turns:\n" + "\n".join(recent_turns) + "\n"
@@ -649,15 +830,15 @@ async def generate_epilogue(
     )
     prompt = (
         f"Respond in: {language_name}.\n\n"
-        "For THIS response only, ignore the numbered-options and STATE/ATTRS tag rules — "
-        "write ONLY a short (4-7 sentence) closing/epilogue passage for this character's "
-        "story, nothing before or after it.\n\n"
+        "For THIS response only, ignore the numbered-options rule — write ONLY a short "
+        "(4-7 sentence) closing/epilogue passage for this character's story, nothing before "
+        "or after it.\n\n"
         f"{category_part}{history_block}"
         f"Character sheet: {json.dumps(character, ensure_ascii=False)}\n\n"
         f"{reason_instruction}"
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model()
+    model = get_model(with_tools=False)
     response = await asyncio.to_thread(model.generate_content, prompt)
     return _extract_text(response)

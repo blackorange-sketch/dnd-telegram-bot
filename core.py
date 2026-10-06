@@ -173,7 +173,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     category_hint = wc.short_hint_for(category_key) if category_key else None
 
     try:
-        story_text = await gemini_client.generate_story_turn(
+        clean_text, parsed_state = await gemini_client.generate_story_turn(
             summary=game.summary,
             recent_turns=game.recent_turns,
             character=game.character,
@@ -185,7 +185,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     except gemini_client.ContentBlockedError:
         logger.warning("Turn blocked by safety filter, retrying once with a softened prompt")
         try:
-            story_text = await gemini_client.generate_story_turn(
+            clean_text, parsed_state = await gemini_client.generate_story_turn(
                 summary=game.summary,
                 recent_turns=game.recent_turns,
                 character=game.character,
@@ -202,7 +202,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
             # filter no matter what the player picks next. Last resort: drop
             # that raw history and lean on the compressed summary instead.
             logger.warning("Still blocked after softening; retrying once more without raw recent-turn history")
-            story_text = await gemini_client.generate_story_turn(
+            clean_text, parsed_state = await gemini_client.generate_story_turn(
                 summary=game.summary,
                 recent_turns=[],
                 character=game.character,
@@ -213,7 +213,6 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
             )
             used_last_resort = True
 
-    clean_text, parsed_state = gemini_client.parse_state_tag(story_text)
     if "hp" in parsed_state:
         # max_hp shouldn't drift turn to turn — lock it once set, so a
         # model slip can't silently reset the character's max health.
@@ -321,7 +320,7 @@ async def create_adventure(
     character_brief, character_record = build_character_brief(character_description, gender, age)
 
     try:
-        opening = await gemini_client.generate_new_adventure_opening(
+        clean_text, parsed_state, attrs = await gemini_client.generate_new_adventure_opening(
             category_label=wc.label_for(category_key, language_key),
             category_hint=wc.hint_for(category_key),
             world_description=world_description,
@@ -330,7 +329,7 @@ async def create_adventure(
         )
     except gemini_client.ContentBlockedError:
         logger.warning("Opening blocked by safety filter, retrying once with a softened prompt")
-        opening = await gemini_client.generate_new_adventure_opening(
+        clean_text, parsed_state, attrs = await gemini_client.generate_new_adventure_opening(
             category_label=wc.label_for(category_key, language_key),
             category_hint=wc.hint_for(category_key),
             world_description=world_description,
@@ -339,8 +338,6 @@ async def create_adventure(
             soften=True,
         )
 
-    text_after_state, parsed_state = gemini_client.parse_state_tag(opening)
-    clean_text, attrs = gemini_client.parse_attrs_tag(text_after_state)
     hp = parsed_state.get("hp", gemini_client.DEFAULT_HP)
     max_hp = parsed_state.get("max_hp", gemini_client.DEFAULT_HP)
 
