@@ -99,7 +99,11 @@ UPDATE_STATE_FUNCTION = FunctionDeclaration(
             "max_hp": {"type": "integer", "description": "Max HP — rarely changes turn to turn."},
             "money": {
                 "type": "string",
-                "description": "Short label in the world's currency, e.g. '45 gold' or '12 credits'.",
+                "description": (
+                    "Short label in the world's currency, e.g. '45 gold' or '12 credits'. "
+                    "Always include this field — if the character truly has no money or no "
+                    "established currency yet, use \"0\" rather than omitting the field."
+                ),
             },
             "inventory": {
                 "type": "array",
@@ -121,11 +125,13 @@ UPDATE_STATE_FUNCTION = FunctionDeclaration(
                     "Lean list of notable items (at most ~10), each as {{name, equipped}}. "
                     "Merge duplicates with a count in the name ('energy cell x3'); drop anything "
                     "destroyed, used up, or trivial. Only mark 'equipped' true for things actively "
-                    "worn/wielded right now (a weapon in hand, armor being worn) — most items are not."
+                    "worn/wielded right now (a weapon in hand, armor being worn) — most items are not. "
+                    "Always include this field — use an empty array if the character truly carries "
+                    "nothing notable, rather than omitting the field."
                 ),
             },
         },
-        "required": ["hp", "max_hp"],
+        "required": ["hp", "max_hp", "money", "inventory"],
     },
 )
 
@@ -888,10 +894,12 @@ async def generate_party_opening(
         f"Respond in: {language_name}.\n\n"
         "Every character in this party already has their own stats from being created "
         "individually — do NOT call update_character_state or set_character_attributes in "
-        "this response. Just write the opening scene and the numbered options; you may "
-        "optionally call update_journal once to record the party's starting location "
-        "(required: every new adventure begins somewhere nameable) and, if the opening "
-        "naturally introduces one, a starting quest hook.\n\n"
+        "this response. Just write the opening scene and the numbered options. You MUST also "
+        "call update_journal exactly once in this same reply, with at minimum the "
+        "\"location\" field filled in (name + short description) — every new adventure begins "
+        "somewhere nameable, so this is not optional here, unlike on an ordinary turn. If the "
+        "opening naturally introduces a goal or hook, also include a starting quest in that "
+        "same update_journal call.\n\n"
         f"World category: {category_label} ({category_hint}).\n"
         f"{world_part}\n\n"
         "This adventure begins with a full party of player characters together in the same "
@@ -939,11 +947,14 @@ async def generate_new_adventure_opening(
         "THIS IS A NEW CHARACTER BEING CREATED — also invent, fitting the world and character: "
         "4-5 short physical/mental attributes (see rule 11, set_character_attributes), some "
         "starting money in a currency that fits the world, and 2-4 starting inventory items. "
-        "Reflect the money and inventory in the update_character_state call. Start at full "
-        f"health: hp=max_hp={DEFAULT_HP} unless the character description implies a different "
-        "max HP, in which case use that. Also call update_journal once to record the starting "
-        "location (required: every new adventure begins somewhere nameable), and, if the "
-        "opening naturally introduces one, a starting quest hook.\n\n"
+        "Reflect the money and inventory in the update_character_state call (never leave those "
+        "fields empty for a brand-new character — invent something modest if nothing else fits). "
+        f"Start at full health: hp=max_hp={DEFAULT_HP} unless the character description implies "
+        "a different max HP, in which case use that. You MUST also call update_journal exactly "
+        "once in this same reply, with at minimum the \"location\" field filled in (name + short "
+        "description) — every new adventure begins somewhere nameable, so this is not optional "
+        "here, unlike on an ordinary turn. If the opening naturally introduces a goal or hook, "
+        "also include a starting quest in that same update_journal call.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
         "with the character, then the list of action options."
     )
