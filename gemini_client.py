@@ -227,13 +227,24 @@ GAME_TOOLS = Tool(function_declarations=[UPDATE_STATE_FUNCTION, SET_ATTRIBUTES_F
 def _to_plain(value):
     """Recursively convert a Gemini function-call argument (a proto
     Struct/MapComposite/RepeatedComposite under the hood) into plain
-    Python dict/list/scalar values."""
+    Python dict/list/scalar values.
+
+    Protobuf's Struct type (what function-call args are built from) only has
+    ONE numeric kind — NumberValue, a double — no matter what the function's
+    declared JSON Schema type says. So even though hp/max_hp/attribute
+    "value" are declared "integer", they always come back as Python float
+    here (e.g. 30.0, not 30). Rounding whole-number floats back to int right
+    at this single conversion point means every caller downstream (hp math,
+    f"{x:+d}" formatting, equality checks against stored ints) just gets a
+    normal int and never has to know this proto quirk exists."""
     if hasattr(value, "items"):
         return {k: _to_plain(v) for k, v in value.items()}
     if isinstance(value, str):
         return value
     if hasattr(value, "__iter__"):
         return [_to_plain(v) for v in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
     return value
 
 
