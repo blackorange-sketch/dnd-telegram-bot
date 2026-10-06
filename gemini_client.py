@@ -117,7 +117,7 @@ UPDATE_STATE_FUNCTION = FunctionDeclaration(
                     "required": ["name"],
                 },
                 "description": (
-                    "Lean list of notable items (at most ~10), each as {name, equipped}. "
+                    "Lean list of notable items (at most ~10), each as {{name, equipped}}. "
                     "Merge duplicates with a count in the name ('energy cell x3'); drop anything "
                     "destroyed, used up, or trivial. Only mark 'equipped' true for things actively "
                     "worn/wielded right now (a weapon in hand, armor being worn) — most items are not."
@@ -427,9 +427,9 @@ Follow these rules on every reply:
    - "money" is a short string label in the world's currency (e.g. "45" or \
      "45 credits" or "12 gold") — include it whenever the world/character \
      has an established currency; omit it only if truly not applicable yet.
-   - "inventory" is a lean list of {name, equipped} objects, one per \
-     notable item (e.g. {"name": "rusty sword", "equipped": true}, \
-     {"name": "health potion x2"}). KEEP IT LEAN: at most about 10 items. \
+   - "inventory" is a lean list of {{name, equipped}} objects, one per \
+     notable item (e.g. {{"name": "rusty sword", "equipped": true}}, \
+     {{"name": "health potion x2"}}). KEEP IT LEAN: at most about 10 items. \
      An item that is destroyed, broken beyond use, empty, or used up must \
      be REMOVED from the list — never keep it with a label like \
      "(destroyed)" or "(empty)". Merge duplicates into one entry with a \
@@ -465,7 +465,7 @@ Follow these rules on every reply:
 13. SHARED JOURNAL: when this turn introduces or changes a notable location, \
     NPC, or quest/goal, call update_journal to record ONLY what changed — \
     never the whole known world. Specifically:
-    - Location: call it with {name, description} only on the turn the party \
+    - Location: call it with {{name, description}} only on the turn the party \
       actually arrives somewhere new and nameable. Don't re-report the same \
       location turn after turn.
     - NPCs: call it with an NPC entry only when a new named NPC is properly \
