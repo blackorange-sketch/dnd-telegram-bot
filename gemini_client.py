@@ -877,6 +877,17 @@ NARRATION_REQUIRED_NOTE = (
     "AND the required function call(s) — both parts, every time."
 )
 
+NO_INLINE_STATE_NOTE = (
+    "This specific reply has no function-calling tools available to you at all, and that is "
+    "intentional — hp, max_hp, money, inventory, attributes, location, and quests for this "
+    "moment are all being collected separately, right after this reply, by other dedicated "
+    "calls. So for THIS reply: do not report, describe, list, or even casually mention any of "
+    "those values in your text, in ANY form — no JSON, no [STATE]/[ATTRS]-style tags, no "
+    "parenthetical stat lines, no \"(hp: 20/20)\" asides. Just write the narration (and numbered "
+    "options, where this turn calls for them) as ordinary prose, exactly as if those systems "
+    "didn't exist for this one reply."
+)
+
 
 async def _generate_ensuring_narration(model, prompt: str):
     """Call the model and, if the reply comes back with a function call but
@@ -1029,19 +1040,19 @@ async def generate_character_sheet(
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
         "THIS IS A NEW CHARACTER BEING CREATED for a multiplayer party — write a short "
-        "(2-4 sentence) introduction of this character fitting the world."
+        "(2-4 sentence) introduction of this character fitting the world.\n\n"
+        f"{NO_INLINE_STATE_NOTE}"
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    # with_tools=True (not False): the model still needs its function-calling
-    # tools present here even though this reply's own function call (if any)
-    # is discarded — with no tools attached at all, the model tends to try to
-    # fulfill the "report state via a function call" system-prompt rule by
-    # writing it out as text instead, leaking fake state/attrs text into the
-    # narration. Letting it see the tools (and simply ignoring whatever call
-    # it makes) keeps that text out, since the dedicated call below is what
-    # actually supplies state/attrs.
-    model = get_model(with_tools=True)
+    # with_tools=False: giving the model tools here led it to skip narration
+    # entirely and reply with function calls only (confirmed via production
+    # logs: text_len=0). Taking tools away stops that, but then the model
+    # would try to fulfill the system prompt's "report state via a function
+    # call" rule by writing it as text instead — that's what NO_INLINE_STATE_NOTE
+    # above explicitly overrides for this one reply. State/attrs still come
+    # from the dedicated forced call below either way.
+    model = get_model(with_tools=False)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     text_after_state, _ = parse_state_tag(text)
@@ -1095,16 +1106,17 @@ async def generate_party_opening(
         f"The first to act will be {first_actor_name}.{attrs_part} The numbered options at "
         "the end of your reply are for them to choose from.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
-        "with the whole party present, then the list of action options."
+        "with the whole party present, then the list of action options.\n\n"
+        f"{NO_INLINE_STATE_NOTE}"
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    # with_tools=True: see the comment in generate_character_sheet — without
-    # tools attached, the model tends to write out the state/journal report
-    # as text instead, since the system prompt still tells it to report
-    # those via a function call. Any call it makes here is simply discarded;
-    # the dedicated call below is what actually supplies the journal.
-    model = get_model(with_tools=True)
+    # with_tools=False: see the comment in generate_character_sheet — tools
+    # present here made the model skip narration and reply with function
+    # calls only (text_len=0, confirmed via production logs). NO_INLINE_STATE_NOTE
+    # above is what stops it from writing the journal out as text instead now
+    # that the tools are gone; the dedicated call below supplies the journal.
+    model = get_model(with_tools=False)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     journal = await _extract_opening_journal(text, language_name)
@@ -1153,16 +1165,18 @@ async def generate_new_adventure_opening(
         f"{character_brief}\n\n"
         "THIS IS A NEW CHARACTER BEING CREATED.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
-        "with the character, then the list of action options."
+        "with the character, then the list of action options.\n\n"
+        f"{NO_INLINE_STATE_NOTE}"
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    # with_tools=True: see the comment in generate_character_sheet — without
-    # tools attached, the model tends to write out the state/attrs/journal
-    # report as text instead, since the system prompt still tells it to
-    # report those via a function call. Any call it makes here is simply
-    # discarded; the dedicated calls below are what actually supply the data.
-    model = get_model(with_tools=True)
+    # with_tools=False: see the comment in generate_character_sheet — tools
+    # present here made the model skip narration and reply with function
+    # calls only (text_len=0, confirmed via production logs — it made all
+    # three calls and wrote zero narration). NO_INLINE_STATE_NOTE above is
+    # what stops it from writing the data out as text instead now that the
+    # tools are gone; the dedicated calls below supply state/attrs/journal.
+    model = get_model(with_tools=False)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     text_after_state, _ = parse_state_tag(text)
