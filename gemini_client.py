@@ -1033,7 +1033,15 @@ async def generate_character_sheet(
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model(with_tools=False)
+    # with_tools=True (not False): the model still needs its function-calling
+    # tools present here even though this reply's own function call (if any)
+    # is discarded — with no tools attached at all, the model tends to try to
+    # fulfill the "report state via a function call" system-prompt rule by
+    # writing it out as text instead, leaking fake state/attrs text into the
+    # narration. Letting it see the tools (and simply ignoring whatever call
+    # it makes) keeps that text out, since the dedicated call below is what
+    # actually supplies state/attrs.
+    model = get_model(with_tools=True)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     text_after_state, _ = parse_state_tag(text)
@@ -1091,7 +1099,12 @@ async def generate_party_opening(
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model(with_tools=False)
+    # with_tools=True: see the comment in generate_character_sheet — without
+    # tools attached, the model tends to write out the state/journal report
+    # as text instead, since the system prompt still tells it to report
+    # those via a function call. Any call it makes here is simply discarded;
+    # the dedicated call below is what actually supplies the journal.
+    model = get_model(with_tools=True)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     journal = await _extract_opening_journal(text, language_name)
@@ -1144,7 +1157,12 @@ async def generate_new_adventure_opening(
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model(with_tools=False)
+    # with_tools=True: see the comment in generate_character_sheet — without
+    # tools attached, the model tends to write out the state/attrs/journal
+    # report as text instead, since the system prompt still tells it to
+    # report those via a function call. Any call it makes here is simply
+    # discarded; the dedicated calls below are what actually supply the data.
+    model = get_model(with_tools=True)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     text_after_state, _ = parse_state_tag(text)
