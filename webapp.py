@@ -441,24 +441,29 @@ async def api_room_join(request: web.Request) -> web.Response:
             return web.json_response({"error": "room_not_found"}, status=404)
         return web.json_response(_room_render(room, user_id))
 
-    room = rooms.join_room(room_code, user_id, _display_name(user))
-    if room is None:
-        return web.json_response({"error": "room_not_found"}, status=404)
+    # Locked: joining reads the room, may call Gemini (an await another
+    # request can interleave during), mutates it, then saves — see
+    # rooms.room_lock's docstring for why two near-simultaneous requests for
+    # the same room must not both do this unserialized.
+    async with rooms.room_lock(room_code):
+        room = rooms.join_room(room_code, user_id, _display_name(user))
+        if room is None:
+            return web.json_response({"error": "room_not_found"}, status=404)
 
-    seat = room.seats[user_id]
-    if not seat.character:
-        try:
-            await room_core.create_character_for_seat(
-                room, seat,
-                character_description=body.get("character_description"),
-                gender=body.get("gender"),
-                age=body.get("age"),
-                in_progress=room.started,
-            )
-            rooms.save_room(room)
-        except Exception as e:
-            logger.exception("Gemini error creating joining character")
-            return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
+        seat = room.seats[user_id]
+        if not seat.character:
+            try:
+                await room_core.create_character_for_seat(
+                    room, seat,
+                    character_description=body.get("character_description"),
+                    gender=body.get("gender"),
+                    age=body.get("age"),
+                    in_progress=room.started,
+                )
+                rooms.save_room(room)
+            except Exception as e:
+                logger.exception("Gemini error creating joining character")
+                return web.json_response({"error": "gemini_error", "detail": str(e)}, status=502)
 
     rooms.touch_seen(room.room_id, user_id)
     return web.json_response(_room_render(room, user_id))
@@ -477,28 +482,40 @@ async def api_room_start(request: web.Request) -> web.Response:
     if user_id is None:
         return web.json_response({"error": "unauthorized"}, status=401)
 
-    room = rooms.load_room_for_user(user_id)
-    if room is None:
+    room_id = rooms.room_id_for_user(user_id)
+    if room_id is None:
         return web.json_response({"error": "no_active_room"}, status=404)
-    if room.host_user_id != user_id:
-        return web.json_response({"error": "not_host"}, status=403)
-    if room.started:
-        return web.json_response({"error": "already_started"}, status=409)
-    if not room.turn_order:
-        return web.json_response({"error": "no_players"}, status=400)
 
-    try:
-        result = await room_core.start_room_adventure(room)
-    except Exception as e:
-        logger.exception("Gemini error starting room adventure")
-        error_key = "content_blocked" if isinstance(e, gemini_client.ContentBlockedError) else "gemini_error"
-        return web.json_response({"error": error_key, "detail": str(e)}, status=502)
+    # Locked: starting reads the room, calls Gemini (an await another request
+    # can interleave during), mutates it, then saves. Without this lock, a
+    # double-tapped "start" button (or a retried request) fires this handler
+    # twice before either save lands — confirmed in production logs as two
+    # generate_party_opening calls 1.5s apart for the same room, the second
+    # silently overwriting whatever the first had just saved. See
+    # rooms.room_lock's docstring.
+    async with rooms.room_lock(room_id):
+        room = rooms.load_room(room_id)
+        if room is None:
+            return web.json_response({"error": "no_active_room"}, status=404)
+        if room.host_user_id != user_id:
+            return web.json_response({"error": "not_host"}, status=403)
+        if room.started:
+            return web.json_response({"error": "already_started"}, status=409)
+        if not room.turn_order:
+            return web.json_response({"error": "no_players"}, status=400)
 
-    result["room_id"] = room.room_id
-    result["host_user_id"] = room.host_user_id
-    result["is_turn"] = room.is_turn(user_id)
-    seat = room.seats.get(user_id)
-    result["character"] = seat.character if seat else None
+        try:
+            result = await room_core.start_room_adventure(room)
+        except Exception as e:
+            logger.exception("Gemini error starting room adventure")
+            error_key = "content_blocked" if isinstance(e, gemini_client.ContentBlockedError) else "gemini_error"
+            return web.json_response({"error": error_key, "detail": str(e)}, status=502)
+
+        result["room_id"] = room.room_id
+        result["host_user_id"] = room.host_user_id
+        result["is_turn"] = room.is_turn(user_id)
+        seat = room.seats.get(user_id)
+        result["character"] = seat.character if seat else None
 
     rooms.touch_seen(room.room_id, user_id)
     next_user_id = result.get("active_user_id")
@@ -542,79 +559,93 @@ async def api_room_action(request: web.Request) -> web.Response:
     if user_id is None:
         return web.json_response({"error": "unauthorized"}, status=401)
 
-    room = rooms.load_room_for_user(user_id)
-    if room is None:
+    room_id = rooms.room_id_for_user(user_id)
+    if room_id is None:
         return web.json_response({"error": "no_active_room"}, status=404)
-    if not room.started:
-        return web.json_response({"error": "not_started"}, status=409)
 
-    if not room.is_turn(user_id):
-        return web.json_response({
-            "error": "not_your_turn",
-            "active_user_id": room.current_turn_user_id(),
-            "party": room_core.party_status(room),
-        }, status=409)
+    # Locked: acting reads the room, calls Gemini (an await another request
+    # can interleave during), mutates it (including advancing whose turn it
+    # is), then saves. Without this, two near-simultaneous actions for the
+    # same room — a double-tapped button, or two players' requests landing
+    # back to back — can both load the room before either saves, so one
+    # save silently overwrites the other's turn/state/turn-order changes.
+    # See rooms.room_lock's docstring (this was confirmed for /api/room/start
+    # via production logs; the same unserialized load-mutate-save shape is
+    # here too).
+    async with rooms.room_lock(room_id):
+        room = rooms.load_room(room_id)
+        if room is None:
+            return web.json_response({"error": "no_active_room"}, status=404)
+        if not room.started:
+            return web.json_response({"error": "not_started"}, status=409)
 
-    seat = room.seats[user_id]
-    action_type = body.get("type")
-    roll_info = None
+        if not room.is_turn(user_id):
+            return web.json_response({
+                "error": "not_your_turn",
+                "active_user_id": room.current_turn_user_id(),
+                "party": room_core.party_status(room),
+            }, status=409)
 
-    if action_type == "choice":
-        try:
-            idx = int(body.get("index", 0))
-        except (TypeError, ValueError):
-            return web.json_response({"error": "invalid_index"}, status=400)
+        seat = room.seats[user_id]
+        action_type = body.get("type")
+        roll_info = None
 
-        option = None
-        if room.pending_options and 1 <= idx <= len(room.pending_options):
-            option = room.pending_options[idx - 1]
+        if action_type == "choice":
+            try:
+                idx = int(body.get("index", 0))
+            except (TypeError, ValueError):
+                return web.json_response({"error": "invalid_index"}, status=400)
 
-        if option is None:
-            player_input = f"Choosing option {idx}"
-        elif option.get("requires_roll"):
-            roll_info = core.compute_roll(seat, attribute=option.get("attribute"))
-            player_input = f"{option['text']} — {core.roll_action_text(roll_info)}"
+            option = None
+            if room.pending_options and 1 <= idx <= len(room.pending_options):
+                option = room.pending_options[idx - 1]
+
+            if option is None:
+                player_input = f"Choosing option {idx}"
+            elif option.get("requires_roll"):
+                roll_info = core.compute_roll(seat, attribute=option.get("attribute"))
+                player_input = f"{option['text']} — {core.roll_action_text(roll_info)}"
+            else:
+                player_input = option["text"]
+
+        elif action_type == "roll":
+            try:
+                sides = int(body.get("sides", 20))
+            except (TypeError, ValueError):
+                sides = 20
+            roll_info = core.compute_roll(seat, sides)
+            player_input = f"I roll a die — {core.roll_action_text(roll_info)}"
+
+        elif action_type == "text":
+            player_input = str(body.get("text", "")).strip()
+            if not player_input:
+                return web.json_response({"error": "empty_text"}, status=400)
+
         else:
-            player_input = option["text"]
+            return web.json_response({"error": "invalid_type"}, status=400)
 
-    elif action_type == "roll":
         try:
-            sides = int(body.get("sides", 20))
-        except (TypeError, ValueError):
-            sides = 20
-        roll_info = core.compute_roll(seat, sides)
-        player_input = f"I roll a die — {core.roll_action_text(roll_info)}"
+            result = await room_core.perform_room_turn(room, user_id, player_input)
+        except room_core.NotYourTurnError:
+            return web.json_response({
+                "error": "not_your_turn",
+                "active_user_id": room.current_turn_user_id(),
+                "party": room_core.party_status(room),
+            }, status=409)
+        except Exception as e:
+            logger.exception("Gemini error in room action")
+            error_key = "content_blocked" if isinstance(e, gemini_client.ContentBlockedError) else "gemini_error"
+            return web.json_response({
+                "error": error_key,
+                "detail": str(e),
+                "options": room.pending_options,
+                "character": seat.character,
+                "active_user_id": room.current_turn_user_id(),
+                "party": room_core.party_status(room),
+            }, status=502)
 
-    elif action_type == "text":
-        player_input = str(body.get("text", "")).strip()
-        if not player_input:
-            return web.json_response({"error": "empty_text"}, status=400)
-
-    else:
-        return web.json_response({"error": "invalid_type"}, status=400)
-
-    try:
-        result = await room_core.perform_room_turn(room, user_id, player_input)
-    except room_core.NotYourTurnError:
-        return web.json_response({
-            "error": "not_your_turn",
-            "active_user_id": room.current_turn_user_id(),
-            "party": room_core.party_status(room),
-        }, status=409)
-    except Exception as e:
-        logger.exception("Gemini error in room action")
-        error_key = "content_blocked" if isinstance(e, gemini_client.ContentBlockedError) else "gemini_error"
-        return web.json_response({
-            "error": error_key,
-            "detail": str(e),
-            "options": room.pending_options,
-            "character": seat.character,
-            "active_user_id": room.current_turn_user_id(),
-            "party": room_core.party_status(room),
-        }, status=502)
-
-    if roll_info:
-        result["roll"] = roll_info
+        if roll_info:
+            result["roll"] = roll_info
 
     rooms.touch_seen(room.room_id, user_id)
     next_user_id = result.get("active_user_id")

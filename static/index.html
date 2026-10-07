@@ -1226,9 +1226,25 @@ async function shareRoomInvite() {
   }
 }
 
+let _startingRoomAdventure = false;
+
 async function startRoomAdventure() {
+  // Guards against a double-tap (or a slow-connection retry) firing this
+  // twice — the backend now also serializes /api/room/start per room, but
+  // skipping the duplicate request here avoids a pointless second Gemini
+  // call and a flash of "already_started" in the UI.
+  if (_startingRoomAdventure) return;
+  _startingRoomAdventure = true;
   onboardingHTML(`<div class="wiz-loading">${escapeHtml(t("creating"))}</div>`);
-  const data = await api("/api/room/start", {});
+  try {
+    const data = await api("/api/room/start", {});
+    await _handleRoomStartResult(data);
+  } finally {
+    _startingRoomAdventure = false;
+  }
+}
+
+async function _handleRoomStartResult(data) {
   if (data.error) {
     const message = data.error === "content_blocked"
       ? t("content_blocked")

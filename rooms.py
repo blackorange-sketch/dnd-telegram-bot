@@ -12,11 +12,13 @@ multiplayer game loop will be built on top of in a follow-up step — the
 turn-based mode: one player acts, then play passes to the next.
 """
 
+import asyncio
 import json
 import random
 import sqlite3
 import string
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 
 from game_state import DB_PATH, MAX_LOG_ENTRIES, MAX_RECENT_TURNS
@@ -47,6 +49,27 @@ def seconds_since_seen(room_id: str, user_id: int) -> float:
     if ts is None:
         return float("inf")
     return time.monotonic() - ts
+
+
+# Per-room asyncio.Lock, used to serialize any request that reads a room,
+# calls Gemini (an await, during which another request can freely interleave
+# in the same event loop), mutates the in-memory RoomState, and saves it back
+# (/api/room/start, /api/room/action, /api/room/join). Without this, two
+# near-simultaneous requests for the same room (a double-tapped button, a
+# flaky-connection retry, two players acting at the exact same moment) can
+# both load the room before either saves — each proceeds as if its own view
+# were current, and whichever save_room() happens last silently overwrites
+# everything the other one did (a lost opening scene, a lost turn, a lost
+# journal update, seats/turn_order diverging from what the players see).
+# This was confirmed in production logs: generate_party_opening fired twice,
+# 1.5 seconds apart, for the same room. A plain dict of locks is fine here —
+# this process is the only writer to these rooms, and a lock is created for
+# a room_id on first use and simply kept for the process's lifetime.
+_ROOM_LOCKS: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+def room_lock(room_id: str) -> asyncio.Lock:
+    return _ROOM_LOCKS[room_id]
 
 
 @dataclass
