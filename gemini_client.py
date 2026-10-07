@@ -229,6 +229,62 @@ SET_ATTRIBUTES_FUNCTION = FunctionDeclaration(
 
 GAME_TOOLS = Tool(function_declarations=[UPDATE_STATE_FUNCTION, SET_ATTRIBUTES_FUNCTION, UPDATE_JOURNAL_FUNCTION])
 
+INIT_CHARACTER_FUNCTION = FunctionDeclaration(
+    name="initialize_character",
+    description=(
+        "Report the brand-new character's starting hp/max_hp/money/inventory/attributes, all "
+        "together in this one call, right after writing the opening narration."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "hp": {"type": "integer", "description": "Starting HP."},
+            "max_hp": {"type": "integer", "description": "Max HP."},
+            "money": {
+                "type": "string",
+                "description": (
+                    "Short label in the world's currency, e.g. '45 gold' or '12 credits'. "
+                    "Invent something modest fitting the world if nothing else fits — never empty."
+                ),
+            },
+            "inventory": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Item name, e.g. 'rusty sword'."},
+                        "equipped": {
+                            "type": "boolean",
+                            "description": "True if the character starts wearing/wielding this item.",
+                        },
+                    },
+                    "required": ["name"],
+                },
+                "description": "2-4 starting inventory items fitting the character and world.",
+            },
+            "attributes": {
+                "type": "array",
+                "description": (
+                    "4-5 short attribute labels in the target language that fit the world and "
+                    "character (e.g. physical strength, intellect, agility, willpower — whatever "
+                    "suits the setting), each valued 1-10."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "value": {"type": "integer"},
+                    },
+                    "required": ["label", "value"],
+                },
+            },
+        },
+        "required": ["hp", "max_hp", "money", "inventory", "attributes"],
+    },
+)
+
+INIT_CHARACTER_TOOLS = Tool(function_declarations=[INIT_CHARACTER_FUNCTION])
+
 
 def _to_plain(value):
     """Recursively convert a Gemini function-call argument (a proto
@@ -524,6 +580,8 @@ def _configure():
 
 _model = None
 _model_plain = None
+_model_journal_only = None
+_model_init_character = None
 
 
 def get_model(with_tools: bool = True):
@@ -557,6 +615,115 @@ def get_model(with_tools: bool = True):
             safety_settings=SAFETY_SETTINGS,
         )
     return _model_plain
+
+
+def get_journal_only_model():
+    """A third cached model instance whose ONLY tool is update_journal, with
+    tool_config mode="ANY" instead of "AUTO" — this forces a function call
+    every time generate_content runs against it, rather than leaving it to
+    the model's judgment.
+
+    Why this exists: asking Gemini for several function calls in the same
+    reply as free-form narration (narrate the scene AND call
+    update_character_state AND call set_character_attributes AND call
+    update_journal) turned out to be unreliable in production — diagnostic
+    logging showed the model reliably made at most one of the requested
+    calls per reply, never several together, no matter how the prompt wording
+    was strengthened ("you MUST call update_journal..."). So journal
+    extraction for opening scenes is now a second, dedicated call made AFTER
+    the narration is written, using only the narration text as input and a
+    model that is incapable of responding with anything but a function call."""
+    global _model_journal_only
+    if _model_journal_only is None:
+        _configure()
+        _model_journal_only = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            safety_settings=SAFETY_SETTINGS,
+            tools=[Tool(function_declarations=[UPDATE_JOURNAL_FUNCTION])],
+            tool_config={
+                "function_calling_config": {
+                    "mode": "ANY",
+                }
+            },
+        )
+    return _model_journal_only
+
+
+async def _extract_opening_journal(narration_text: str, language_name: str) -> dict:
+    """Dedicated forced call to log the starting location (and an opening
+    quest, if the scene clearly introduces one) from an opening scene's own
+    narration text, decoupled from the call that wrote that narration. See
+    get_journal_only_model() for why this is a separate call. Never raises —
+    on any failure this just returns {} and the adventure proceeds without
+    journal data for its opening, same as before this existed."""
+    model = get_journal_only_model()
+    prompt = (
+        f"Text fields in your function call should be in: {language_name}.\n\n"
+        "Below is the opening scene of a new adventure. Call update_journal exactly once to "
+        "record the starting location (name + short description) that this scene establishes, "
+        "and a starting quest/goal too if the scene clearly introduces one.\n\n"
+        f"Opening scene:\n{narration_text}"
+    )
+    try:
+        response = await asyncio.to_thread(model.generate_content, prompt)
+    except Exception:
+        logger.exception("Dedicated journal-extraction call failed; continuing without journal data")
+        return {}
+    return _extract_journal(response)
+
+
+def get_init_character_model():
+    """A fourth cached model instance, mirroring get_journal_only_model():
+    its only tool is initialize_character and tool_config mode is "ANY", so
+    it is forced to call it every time. Used right after the opening
+    narration is written, to reliably get hp/max_hp/money/inventory/
+    attributes all in one guaranteed call, instead of asking for
+    update_character_state and set_character_attributes alongside narration
+    in a single reply — which production logging showed only reliably
+    yields ONE of the two function calls, never both."""
+    global _model_init_character
+    if _model_init_character is None:
+        _configure()
+        _model_init_character = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            safety_settings=SAFETY_SETTINGS,
+            tools=[INIT_CHARACTER_TOOLS],
+            tool_config={
+                "function_calling_config": {
+                    "mode": "ANY",
+                }
+            },
+        )
+    return _model_init_character
+
+
+async def _extract_opening_character_init(
+    narration_text: str, character_brief: str, language_name: str
+) -> tuple[dict, dict]:
+    """Dedicated forced call that returns (state, attrs) for a brand-new
+    character, using the just-written opening narration plus the original
+    character brief as context. Never raises — on failure returns ({}, {})
+    and the caller's own DEFAULT_HP fallback takes over, same as if Gemini
+    had simply not called the function."""
+    model = get_init_character_model()
+    prompt = (
+        f"Text fields in your function call should be in: {language_name}.\n\n"
+        "A brand-new character was just created for a new adventure. Call initialize_character "
+        "exactly once with their starting hp, max_hp, money, inventory, and 4-5 attributes (1-10 "
+        f"each), fitting the character and the opening scene below. Start at full health: "
+        f"hp=max_hp={DEFAULT_HP} unless the character description implies a different max HP.\n\n"
+        f"Character description: {character_brief}\n\n"
+        f"Opening scene:\n{narration_text}"
+    )
+    try:
+        response = await asyncio.to_thread(model.generate_content, prompt)
+    except Exception:
+        logger.exception("Dedicated character-init call failed; falling back to defaults")
+        return {}, {}
+    args = _extract_function_args(response, "initialize_character") or {}
+    attrs = _attrs_list_to_dict({"attributes": args.get("attributes")}) if args.get("attributes") else {}
+    state = {k: v for k, v in args.items() if k != "attributes"}
+    return state, attrs
 
 
 def _clean_after_tag_removal(text: str) -> str:
@@ -844,7 +1011,12 @@ async def generate_character_sheet(
     used when a room is created (the host) and whenever someone joins a
     room, whether still in the lobby or into an already-started game. Keeps
     every seat's stats independent of whatever the shared opening scene
-    ends up saying. Returns (description_text, state, attrs)."""
+    ends up saying. Returns (description_text, state, attrs).
+
+    Like generate_new_adventure_opening, the write-up is generated with no
+    tools attached, and hp/max_hp/money/inventory/attributes are pulled out
+    afterward via the dedicated forced initialize_character call — see
+    _extract_opening_character_init for why."""
     if world_description:
         world_part = f"World description: {world_description}"
     else:
@@ -853,26 +1025,20 @@ async def generate_character_sheet(
     prompt = (
         f"Respond in: {language_name}.\n\n"
         "For THIS response only, ignore the numbered-options rule — do not produce any "
-        "numbered options, just the short character write-up, then the two function calls.\n\n"
+        "numbered options, just the short character write-up.\n\n"
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
         "THIS IS A NEW CHARACTER BEING CREATED for a multiplayer party — write a short "
-        "(2-4 sentence) introduction of this character fitting the world, then invent, "
-        "fitting the world and character: 4-5 short physical/mental attributes (see rule "
-        "11, set_character_attributes), some starting money in a currency that fits the "
-        "world, and 2-4 starting inventory items. Reflect the money and inventory in the "
-        f"update_character_state call. Start at full health: hp=max_hp={DEFAULT_HP} unless "
-        "the description implies a different max HP, in which case use that."
+        "(2-4 sentence) introduction of this character fitting the world."
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model(with_tools=True)
+    model = get_model(with_tools=False)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     text_after_state, _ = parse_state_tag(text)
     clean_text, _ = parse_attrs_tag(text_after_state)
-    state = _extract_state(response, text)
-    attrs = _extract_attrs(response, text)
+    state, attrs = await _extract_opening_character_init(clean_text, character_brief, language_name)
     _log_turn_result("generate_character_sheet", clean_text, state, attrs=attrs)
     return clean_text, state, attrs
 
@@ -892,10 +1058,13 @@ async def generate_party_opening(
     generate_character_sheet beforehand) — this call only writes the
     narrative that introduces the whole party together, plus the first set
     of options. No character state/attributes to report here since nobody's
-    stats are being established by this call, but this is the right moment
-    to record the party's starting location (and an opening quest hook, if
-    one is given) via update_journal — the model is told not to call the
-    character-state functions here. Returns (text, journal)."""
+    stats are being established by this call. The starting location (and an
+    opening quest hook, if the scene gives one) is logged afterward via a
+    separate, dedicated update_journal call — see _extract_opening_journal —
+    rather than asked for in this same reply, because production logging
+    showed Gemini reliably makes only one function call per reply even when
+    asked for a function call plus narration, let alone a function call
+    alongside prose it's also focused on writing well. Returns (text, journal)."""
     if world_description:
         world_part = f"World description: {world_description}"
     else:
@@ -910,13 +1079,7 @@ async def generate_party_opening(
     prompt = (
         f"Respond in: {language_name}.\n\n"
         "Every character in this party already has their own stats from being created "
-        "individually — do NOT call update_character_state or set_character_attributes in "
-        "this response. Just write the opening scene and the numbered options. You MUST also "
-        "call update_journal exactly once in this same reply, with at minimum the "
-        "\"location\" field filled in (name + short description) — every new adventure begins "
-        "somewhere nameable, so this is not optional here, unlike on an ordinary turn. If the "
-        "opening naturally introduces a goal or hook, also include a starting quest in that "
-        "same update_journal call.\n\n"
+        "individually — just write the opening scene and the numbered options.\n\n"
         f"World category: {category_label} ({category_hint}).\n"
         f"{world_part}\n\n"
         "This adventure begins with a full party of player characters together in the same "
@@ -928,10 +1091,10 @@ async def generate_party_opening(
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model(with_tools=True)
+    model = get_model(with_tools=False)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
-    journal = _extract_journal(response)
+    journal = await _extract_opening_journal(text, language_name)
     _log_turn_result("generate_party_opening", text, {}, journal=journal)
     return text, journal
 
@@ -951,6 +1114,19 @@ async def generate_new_adventure_opening(
     character_brief is a ready-made instruction describing the character —
     either the player's own description or gender/age for random generation.
     Returns (opening_text, state, attrs, journal).
+
+    The narration is written first, with no tools attached at all. The
+    character's starting hp/max_hp/money/inventory/attributes and the
+    starting location/quest are then each pulled out via their own dedicated
+    forced function call (_extract_opening_character_init,
+    _extract_opening_journal) instead of being asked for inside the same
+    reply as the narration. Production logging showed that asking Gemini to
+    write narration AND call update_character_state AND call
+    set_character_attributes AND call update_journal all in one reply only
+    reliably produced ONE of those three function calls — never all three —
+    no matter how the prompt wording was strengthened. Splitting each
+    concern into its own forced call (tool_config mode="ANY", a single tool
+    available) is slower by a couple of extra calls but actually reliable.
     """
     if world_description:
         world_part = f"World description from the player: {world_description}"
@@ -962,30 +1138,19 @@ async def generate_new_adventure_opening(
         f"World category: {category_label} ({category_hint}).\n"
         f"{world_part}\n\n"
         f"{character_brief}\n\n"
-        "THIS IS A NEW CHARACTER BEING CREATED — also invent, fitting the world and character: "
-        "4-5 short physical/mental attributes (see rule 11, set_character_attributes), some "
-        "starting money in a currency that fits the world, and 2-4 starting inventory items. "
-        "Reflect the money and inventory in the update_character_state call (never leave those "
-        "fields empty for a brand-new character — invent something modest if nothing else fits). "
-        f"Start at full health: hp=max_hp={DEFAULT_HP} unless the character description implies "
-        "a different max HP, in which case use that. You MUST also call update_journal exactly "
-        "once in this same reply, with at minimum the \"location\" field filled in (name + short "
-        "description) — every new adventure begins somewhere nameable, so this is not optional "
-        "here, unlike on an ordinary turn. If the opening naturally introduces a goal or hook, "
-        "also include a starting quest in that same update_journal call.\n\n"
+        "THIS IS A NEW CHARACTER BEING CREATED.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
         "with the character, then the list of action options."
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model(with_tools=True)
+    model = get_model(with_tools=False)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     text_after_state, _ = parse_state_tag(text)
     clean_text, _ = parse_attrs_tag(text_after_state)
-    state = _extract_state(response, text)
-    attrs = _extract_attrs(response, text)
-    journal = _extract_journal(response)
+    state, attrs = await _extract_opening_character_init(clean_text, character_brief, language_name)
+    journal = await _extract_opening_journal(clean_text, language_name)
     _log_turn_result("generate_new_adventure_opening", clean_text, state, attrs=attrs, journal=journal)
     return clean_text, state, attrs, journal
 
