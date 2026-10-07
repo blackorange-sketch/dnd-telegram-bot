@@ -1846,92 +1846,60 @@ function acceptWorldPreview() {
   renderCharacterMethodStep();
 }
 
+// One combined screen: type a description yourself, generate one
+// automatically (editable afterward, regenerate as many times as you like),
+// or mix both — nothing here commits until "Continue" is pressed, so
+// changing your mind about the character never means restarting the whole
+// onboarding wizard (picking language/mode/category/world again). Replaces
+// what used to be four separate steps (method choice → manual text OR
+// gender → age → preview-with-confirm).
 function renderCharacterMethodStep() {
   const t = wizard.uiStrings;
+  wizard.gender = wizard.gender || "any";
+  wizard.age = wizard.age || "";
   onboardingHTML(`
-    <div class="wiz-title">${escapeHtml(t.character_method_prompt)}</div>
-    <button class="btn" onclick="renderCharacterManualStep()">${escapeHtml(t.character_manual_button)}</button>
-    <button class="btn secondary" onclick="renderGenderStep()">${escapeHtml(t.character_random_button)}</button>
+    <div class="wiz-title">${escapeHtml(t.describe_character_prompt)}</div>
+    <textarea class="wiz-textarea" id="charInput">${escapeHtml(wizard.characterDescription || "")}</textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+      <select class="wiz-input" id="charGenderSelect" style="flex:1;min-width:110px;">
+        <option value="any"${wizard.gender === "any" ? " selected" : ""}>${escapeHtml(t.gender_any)}</option>
+        <option value="male"${wizard.gender === "male" ? " selected" : ""}>${escapeHtml(t.gender_male)}</option>
+        <option value="female"${wizard.gender === "female" ? " selected" : ""}>${escapeHtml(t.gender_female)}</option>
+      </select>
+      <input class="wiz-input" id="charAgeInput" placeholder="27" value="${escapeHtml(wizard.age)}" style="flex:1;min-width:80px;">
+    </div>
+    <button class="btn secondary" onclick="generateCharacterDescription()">${escapeHtml(t.character_random_button)}</button>
+    <button class="btn" onclick="confirmCharacterStep()">${escapeHtml(t.continue_button)}</button>
     ${cancelButtonHtml()}
   `);
 }
 
-function renderCharacterManualStep() {
+async function generateCharacterDescription() {
   const t = wizard.uiStrings;
-  onboardingHTML(`
-    <div class="wiz-title">${escapeHtml(t.describe_character_prompt)}</div>
-    <textarea class="wiz-textarea" id="charInput"></textarea>
-    <button class="btn" onclick="submitCharacterText()">${escapeHtml(t.continue_button)}</button>
-  `);
-}
-
-function submitCharacterText() {
-  const text = document.getElementById("charInput").value.trim();
-  wizard.characterDescription = text || null;
-  startAdventure();
-}
-
-function renderGenderStep() {
-  const t = wizard.uiStrings;
-  onboardingHTML(`
-    <div class="wiz-title">${escapeHtml(t.choose_gender)}</div>
-    <button class="btn" onclick="selectGender('male')">${escapeHtml(t.gender_male)}</button>
-    <button class="btn" onclick="selectGender('female')">${escapeHtml(t.gender_female)}</button>
-    <button class="btn secondary" onclick="selectGender('any')">${escapeHtml(t.gender_any)}</button>
-  `);
-}
-
-function selectGender(g) {
-  wizard.gender = g;
-  renderAgeStep();
-}
-
-function renderAgeStep() {
-  const t = wizard.uiStrings;
-  onboardingHTML(`
-    <div class="wiz-title">${escapeHtml(t.enter_age_prompt)}</div>
-    <input class="wiz-input" id="ageInput" placeholder="27">
-    <button class="btn" onclick="submitAge()">${escapeHtml(t.continue_button)}</button>
-  `);
-}
-
-function submitAge() {
-  const value = document.getElementById("ageInput").value.trim();
-  wizard.age = value || "any";
-  if (wizard.multiplayer === "join") {
-    // Joining an in-progress room: there's no wizard.category/worldDescription
-    // on this client (the joiner never picks those — the room already has
-    // them), so the generic preview endpoint can't be used here. The server
-    // generates a fitting character directly from the room's own world when
-    // /api/room/join is called, so just submit straight away.
-    startAdventure();
-  } else {
-    requestCharacterPreview();
-  }
-}
-
-async function requestCharacterPreview() {
-  const t = wizard.uiStrings;
+  wizard.gender = document.getElementById("charGenderSelect").value;
+  wizard.age = document.getElementById("charAgeInput").value.trim();
   onboardingHTML(`<div class="wiz-loading">${escapeHtml(t.generating_preview)}</div>`);
   const data = await api("/api/preview/character", {
     language: wizard.language,
     category: wizard.category,
-    gender: wizard.gender,
-    age: wizard.age,
+    gender: wizard.gender || "any",
+    age: wizard.age || "any",
     world_description: wizard.worldDescription,
   });
   if (data.error) { showWizardError(data); return; }
-  wizard.currentPreview = data.preview;
-  onboardingHTML(`
-    <div class="wiz-title">${escapeHtml(t.character_method_prompt)}</div>
-    <div class="preview-card">${escapeHtml(data.preview)}</div>
-    <button class="btn secondary" onclick="requestCharacterPreview()">${escapeHtml(t.preview_regen_button)}</button>
-    <button class="btn" onclick="acceptCharacterPreview()">${escapeHtml(t.preview_accept_button)}</button>
-  `);
+  // Goes straight back into the same editable textarea rather than a
+  // separate read-only preview card — the player can tweak the generated
+  // text, regenerate again, or just press Continue, all without leaving
+  // this screen.
+  wizard.characterDescription = data.preview;
+  renderCharacterMethodStep();
 }
 
-function acceptCharacterPreview() {
-  wizard.characterDescription = wizard.currentPreview;
+function confirmCharacterStep() {
+  wizard.gender = document.getElementById("charGenderSelect").value;
+  wizard.age = document.getElementById("charAgeInput").value.trim() || "any";
+  const text = document.getElementById("charInput").value.trim();
+  wizard.characterDescription = text || null;
   startAdventure();
 }
 
