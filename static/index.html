@@ -566,6 +566,9 @@
     resize: vertical;
     margin-bottom: 10px;
   }
+  .wiz-textarea.char-desc {
+    min-height: 200px;
+  }
   .wiz-input {
     width: 100%;
     padding: 12px;
@@ -1859,17 +1862,17 @@ function renderCharacterMethodStep() {
   wizard.age = wizard.age || "";
   onboardingHTML(`
     <div class="wiz-title">${escapeHtml(t.describe_character_prompt)}</div>
-    <textarea class="wiz-textarea" id="charInput">${escapeHtml(wizard.characterDescription || "")}</textarea>
-    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
-      <select class="wiz-input" id="charGenderSelect" style="flex:1;min-width:110px;">
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+      <select class="wiz-input" id="charGenderSelect" style="flex:1;min-width:110px;margin-bottom:0;">
         <option value="any"${wizard.gender === "any" ? " selected" : ""}>${escapeHtml(t.gender_any)}</option>
         <option value="male"${wizard.gender === "male" ? " selected" : ""}>${escapeHtml(t.gender_male)}</option>
         <option value="female"${wizard.gender === "female" ? " selected" : ""}>${escapeHtml(t.gender_female)}</option>
       </select>
-      <input class="wiz-input" id="charAgeInput" placeholder="27" value="${escapeHtml(wizard.age)}" style="flex:1;min-width:80px;">
+      <input class="wiz-input" id="charAgeInput" placeholder="27" value="${escapeHtml(wizard.age)}" style="flex:1;min-width:80px;margin-bottom:0;">
     </div>
     <button class="btn secondary" onclick="generateCharacterDescription()">${escapeHtml(t.character_random_button)}</button>
     <button class="btn" onclick="confirmCharacterStep()">${escapeHtml(t.continue_button)}</button>
+    <textarea class="wiz-textarea char-desc" id="charInput" style="margin-top:10px;">${escapeHtml(wizard.characterDescription || "")}</textarea>
     ${cancelButtonHtml()}
   `);
 }
