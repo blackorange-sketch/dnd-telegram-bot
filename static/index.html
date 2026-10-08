@@ -8,7 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Orbitron:wght@600;800&family=Creepster&family=Audiowide&family=Special+Elite&family=Metal+Mania&family=Courier+Prime:wght@700&family=Rye&family=Pirata+One&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Orbitron:wght@600;800&family=Creepster&family=Audiowide&family=Special+Elite&family=Metal+Mania&family=Courier+Prime:wght@700&family=Rye&family=Pirata+One&family=Yeseva+One&family=Ruslan+Display&family=Russo+One&family=Stalinist+One&family=Rampart+One&family=Jura:wght@600;700&family=Philosopher:wght@700&family=Underdog&family=Montserrat+Alternates:wght@700&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light dark;
@@ -114,6 +114,50 @@
     --bg-image: radial-gradient(circle at 20% 90%, rgba(14,82,69,0.22), transparent 48%),
                 radial-gradient(circle at 85% 10%, rgba(224,182,86,0.10), transparent 42%);
   }
+  /* --- Cyrillic alternates (Ukrainian/Russian) for the decorative heading
+     fonts above --- */
+  /* Most of the display/decorative fonts picked per theme (Cinzel,
+     Creepster, Metal Mania, Audiowide, Special Elite, Rye, Pirata One,
+     Orbitron) only ship Latin glyphs on Google Fonts — there's no true
+     Cyrillic version of most of these specific decorative typefaces. For
+     uk/ru we swap in a different, separately-chosen Google Font per theme
+     that's close in mood and does have full Cyrillic support, applied via
+     this [data-lang] attribute (set from the player's chosen language,
+     independent of [data-theme]). English/Polish are untouched and keep the
+     original fonts above; this never touches the story narration text
+     itself (#story has its own plain font, not --font-heading). The
+     "detective" theme is deliberately not overridden here — Courier Prime
+     has no Cyrillic glyphs, so the browser already falls back to the plain
+     "monospace" generic listed right after it, which still reads as a
+     typewriter font and needs no Cyrillic-specific pick. */
+  html[data-lang="uk"][data-theme="default"], html[data-lang="ru"][data-theme="default"] {
+    --font-heading: 'Yeseva One', serif;
+  }
+  html[data-lang="uk"][data-theme="fantasy"], html[data-lang="ru"][data-theme="fantasy"] {
+    --font-heading: 'Ruslan Display', serif;
+  }
+  html[data-lang="uk"][data-theme="scifi"], html[data-lang="ru"][data-theme="scifi"] {
+    --font-heading: 'Russo One', sans-serif;
+  }
+  html[data-lang="uk"][data-theme="postapo"], html[data-lang="ru"][data-theme="postapo"] {
+    --font-heading: 'Stalinist One', cursive;
+  }
+  html[data-lang="uk"][data-theme="horror"], html[data-lang="ru"][data-theme="horror"] {
+    --font-heading: 'Rampart One', cursive;
+  }
+  html[data-lang="uk"][data-theme="cyberpunk"], html[data-lang="ru"][data-theme="cyberpunk"] {
+    --font-heading: 'Jura', sans-serif;
+  }
+  html[data-lang="uk"][data-theme="steampunk"], html[data-lang="ru"][data-theme="steampunk"] {
+    --font-heading: 'Philosopher', serif;
+  }
+  html[data-lang="uk"][data-theme="western"], html[data-lang="ru"][data-theme="western"] {
+    --font-heading: 'Underdog', cursive;
+  }
+  html[data-lang="uk"][data-theme="pirates"], html[data-lang="ru"][data-theme="pirates"] {
+    --font-heading: 'Montserrat Alternates', sans-serif;
+  }
+
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
@@ -852,6 +896,10 @@ function applyTheme(category) {
   const key = category || "default";
   const theme = useCategoryTheme ? THEMES[key] : null;
   document.documentElement.dataset.theme = theme ? key : "";
+  // Drives the uk/ru Cyrillic font-alternate CSS rules (see [data-lang] in
+  // the stylesheet) — kept in sync here so every applyTheme() call also
+  // re-checks it, not just the moment the language was first picked.
+  document.documentElement.dataset.lang = currentLanguage || "";
   currentThemeIcon = theme ? theme.icon : "";
   const diceColors = theme || NEUTRAL_DICE;
   if (dieMesh) {
@@ -1744,6 +1792,11 @@ function renderLanguageStep() {
 
 async function selectLanguage(key) {
   wizard.language = key;
+  // Set as soon as the player picks a language (not just once the game
+  // state loads later) so the uk/ru Cyrillic font alternates already apply
+  // to the rest of the onboarding wizard itself.
+  currentLanguage = key;
+  document.documentElement.dataset.lang = key;
   onboardingHTML(`<div class="wiz-loading">...</div>`);
   wizard.uiStrings = await fetch(`/api/ui?lang=${key}`).then(r => r.json());
   if (pendingJoinRoomCode) {
