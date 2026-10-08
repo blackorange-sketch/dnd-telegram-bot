@@ -582,6 +582,7 @@ _model = None
 _model_plain = None
 _model_journal_only = None
 _model_init_character = None
+_model_state_only = None
 
 
 def get_model(with_tools: bool = True):
@@ -695,6 +696,98 @@ def get_init_character_model():
             },
         )
     return _model_init_character
+
+
+def get_state_only_model():
+    """A fifth cached model instance, mirroring get_journal_only_model(): its
+    only tool is update_character_state and tool_config mode is "ANY", so it
+    is forced to call it every time.
+
+    Used for ordinary story turns, replacing the old setup where
+    generate_story_turn asked one combined reply (tool_config mode="AUTO",
+    all of update_character_state/set_character_attributes/update_journal
+    attached at once) to both narrate AND call update_character_state AND
+    call update_journal. Production logging (from a real multi-day session)
+    showed that setup silently skipped update_character_state on a large
+    fraction of turns, and skipped update_journal on nearly all of them —
+    the same "Gemini makes at most one function call per reply when it also
+    has to write narration" limitation already worked around for character
+    creation and opening scenes, just not yet for ongoing turns. Forcing
+    update_character_state as the model's ONLY option in its own dedicated
+    call afterward makes it unconditionally reliable: every turn gets a
+    real report (copied forward unchanged when nothing actually changed),
+    instead of sometimes silently keeping stale hp/money/inventory."""
+    global _model_state_only
+    if _model_state_only is None:
+        _configure()
+        _model_state_only = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            safety_settings=SAFETY_SETTINGS,
+            tools=[Tool(function_declarations=[UPDATE_STATE_FUNCTION])],
+            tool_config={
+                "function_calling_config": {
+                    "mode": "ANY",
+                }
+            },
+        )
+    return _model_state_only
+
+
+async def _extract_turn_state(
+    narration_text: str, player_input: str, character: dict, language_name: str
+) -> dict:
+    """Dedicated forced call that reports hp/max_hp/money/inventory as they
+    stand after an ordinary story turn, decoupled from the call that wrote
+    the turn's narration. See get_state_only_model() for why. Never raises —
+    on failure returns {}, same as if Gemini had simply not reported
+    anything (the caller then keeps the character's existing values)."""
+    model = get_state_only_model()
+    state_line = _state_line(character)
+    prompt = (
+        f"Text fields in your function call should be in: {language_name}.\n\n"
+        "Call update_character_state exactly once to report this character's hp, max_hp, "
+        "money, and inventory as they stand at the END of the turn described below. Start "
+        f"from this CURRENT STATE (ground truth going in): {state_line} — copy each value "
+        "forward exactly unless the turn below actually changed it (damage, healing, a "
+        "purchase, a find, using or losing an item).\n\n"
+        f"Player's action: {player_input}\n\n"
+        f"What happened (narration): {narration_text}"
+    )
+    try:
+        response = await asyncio.to_thread(model.generate_content, prompt)
+    except Exception:
+        logger.exception("Dedicated state-extraction call failed; continuing with unchanged state")
+        return {}
+    return _extract_function_args(response, "update_character_state") or {}
+
+
+async def _extract_turn_journal(narration_text: str, language_name: str) -> dict:
+    """Dedicated forced call that records any journal-worthy change (new/
+    changed location, NPC, or quest) from an ordinary story turn's
+    narration text, decoupled from the call that wrote that narration. See
+    get_journal_only_model() for why. Most turns introduce nothing
+    journal-worthy — the model is explicitly told it's fine to call
+    update_journal with no fields in that case, and _extract_journal already
+    treats an empty call as "no change" downstream. Never raises — on any
+    failure this just returns {} and the turn proceeds without a journal
+    update, same as if Gemini had simply not reported anything."""
+    model = get_journal_only_model()
+    prompt = (
+        f"Text fields in your function call should be in: {language_name}.\n\n"
+        "Below is one turn of an ongoing adventure. Call update_journal exactly once. Include "
+        "a field ONLY if this specific turn actually introduced or changed it: the party's "
+        "location (only on the turn they arrive somewhere new and nameable), an NPC newly met "
+        "or whose relationship to the party meaningfully shifted, or a quest/goal newly given, "
+        "updated, completed, or failed. Most turns change none of these — if so, call "
+        "update_journal with no fields at all rather than repeating anything already known.\n\n"
+        f"This turn:\n{narration_text}"
+    )
+    try:
+        response = await asyncio.to_thread(model.generate_content, prompt)
+    except Exception:
+        logger.exception("Dedicated journal-extraction call failed; continuing without a journal update")
+        return {}
+    return _extract_journal(response)
 
 
 async def _extract_opening_character_init(
@@ -935,6 +1028,20 @@ async def generate_story_turn(
     party_note: str | None = None,
     soften: bool = False,
 ) -> tuple[str, dict, dict]:
+    """Generate one ordinary story turn: narration + options, plus the
+    character's updated hp/money/inventory and any journal change.
+
+    The narration is written first, with no tools attached at all (same
+    reasoning as generate_new_adventure_opening/generate_party_opening): the
+    current state is still given in the prompt as context, for realistic
+    narration (low funds blocking a purchase, a wounded character, etc),
+    but the model is no longer asked to call update_character_state or
+    update_journal in this same reply. Those are pulled out afterward via
+    their own dedicated forced calls (_extract_turn_state,
+    _extract_turn_journal) — see get_state_only_model() for why: production
+    logging showed the old combined reply (narration + up to 3 competing
+    function declarations, mode="AUTO") silently skipped the state update on
+    many turns and skipped the journal update on nearly all of them."""
     context = build_context(summary, recent_turns, character)
     state_line = _state_line(character)
     genre_part = (
@@ -944,8 +1051,8 @@ async def generate_story_turn(
     )
     party_part = (
         f"PARTY (multiplayer — this is a shared adventure; acknowledge the other party members "
-        f"as present/reacting where natural, but this turn's action and state update belong only "
-        f"to the acting player named below): {party_note}\n\n"
+        f"as present/reacting where natural, but this turn's action belongs only to the acting "
+        f"player named below): {party_note}\n\n"
         if party_note else ""
     )
     prompt = (
@@ -953,19 +1060,19 @@ async def generate_story_turn(
         f"{genre_part}"
         f"{party_part}"
         f"{context}\n\n"
-        f"CURRENT STATE (ground truth going into this turn — copy these exact values into "
-        f"your update_character_state call unless something in THIS turn explicitly changes "
-        f"them; never invent or reset them): {state_line}\n\n"
-        f"Player's action now: {player_input}"
+        f"CURRENT STATE (for context only, so the narration stays realistic — e.g. low funds, a "
+        f"wounded character; you do not need to report it back in this reply): {state_line}\n\n"
+        f"Player's action now: {player_input}\n\n"
+        f"{NO_INLINE_STATE_NOTE}"
     )
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
-    model = get_model(with_tools=True)
+    model = get_model(with_tools=False)
     response = await _generate_ensuring_narration(model, prompt)
     text = _extract_text(response)
     clean_text, _ = parse_state_tag(text)  # defensive: strip a stray legacy tag if one appears
-    state = _extract_state(response, text)
-    journal = _extract_journal(response)
+    state = await _extract_turn_state(clean_text, player_input, character, language_name)
+    journal = await _extract_turn_journal(clean_text, language_name)
     _log_turn_result("generate_story_turn", clean_text, state, journal=journal)
     return clean_text, state, journal
 
