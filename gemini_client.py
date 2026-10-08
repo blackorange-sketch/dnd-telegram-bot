@@ -1006,6 +1006,30 @@ NO_INLINE_STATE_NOTE = (
 )
 
 
+def _multiplayer_voice_note(acting_name: str) -> str:
+    """Overrides rule 2 (NARRATIVE VOICE, second-person "you") for ordinary
+    multiplayer turns only. Solo play keeps addressing the single player as
+    "you" — that works fine with one reader. In a shared room several real
+    players read the exact same text every turn, and only one of them acted
+    this turn, so "you did X" is ambiguous about who's being spoken to and
+    reads oddly for everyone else at the table. Third person, naming the
+    acting character, reads naturally for the whole party regardless of
+    whose turn it is."""
+    return (
+        "MULTIPLAYER NARRATIVE VOICE — this overrides rule 2 above for this reply only: this is "
+        "a shared, multiplayer scene and several real players read this exact same text, so do "
+        "NOT address the acting character as \"you\" anywhere in this reply (in any language's "
+        "equivalent pronoun) — that only makes sense addressed to a single reader and is "
+        "ambiguous/jarring for everyone else at the table. Instead, narrate this turn entirely in "
+        f"the third person, referring to the acting character by their name, {acting_name} — "
+        "exactly like narrating a novel with several characters in it, not a direct address to "
+        f"the reader. The numbered options at the end are still {acting_name}'s options to choose "
+        "from, just don't phrase them as \"you can...\" — phrase them as the available actions "
+        "themselves (e.g. \"Search the crate\" rather than \"You search the crate\")."
+    )
+
+
+
 async def _generate_ensuring_narration(model, prompt: str):
     """Call the model and, if the reply comes back with a function call but
     literally no narration text at all — a failure mode where the model
@@ -1050,6 +1074,7 @@ async def generate_story_turn(
     language_name: str,
     category_hint: str | None = None,
     party_note: str | None = None,
+    acting_name: str | None = None,
     soften: bool = False,
 ) -> tuple[str, dict, dict]:
     """Generate one ordinary story turn: narration + options, plus the
@@ -1089,6 +1114,8 @@ async def generate_story_turn(
         f"Player's action now: {player_input}\n\n"
         f"{NO_INLINE_STATE_NOTE}"
     )
+    if acting_name:
+        prompt += f"\n\n{_multiplayer_voice_note(acting_name)}"
     if soften:
         prompt += f"\n\n{SOFTEN_NOTE}"
     model = get_model(with_tools=False)

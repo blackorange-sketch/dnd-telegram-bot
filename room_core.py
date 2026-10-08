@@ -84,6 +84,11 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
     lang_key = room.language
     category_hint = wc.short_hint_for(room.category) if room.category else None
     party_note = _party_roster_note(room, acting_user_id)
+    # Passed to gemini_client so it narrates this turn in the third person
+    # (see _multiplayer_voice_note) instead of solo play's "you" — with
+    # several real players reading the same text, addressing one of them as
+    # "you" every turn is ambiguous and jarring for the rest of the party.
+    acting_name = seat.display_name
 
     room.add_turn(f"[{seat.display_name}]: {player_input}")
 
@@ -100,6 +105,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
             language_name=lang.prompt_name_for(lang_key),
             category_hint=category_hint,
             party_note=party_note,
+            acting_name=acting_name,
         )
         used_last_resort = False
     except gemini_client.ContentBlockedError:
@@ -113,6 +119,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
                 language_name=lang.prompt_name_for(lang_key),
                 category_hint=category_hint,
                 party_note=party_note,
+                acting_name=acting_name,
                 soften=True,
             )
             used_last_resort = False
@@ -126,6 +133,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
                 language_name=lang.prompt_name_for(lang_key),
                 category_hint=category_hint,
                 party_note=party_note,
+                acting_name=acting_name,
                 soften=True,
             )
             used_last_resort = True
