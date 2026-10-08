@@ -52,6 +52,9 @@ def _extract_text(response) -> str:
         parts = []
     text = "".join(getattr(part, "text", None) or "" for part in parts)
     text = FAKE_FUNCTION_CALL_RE.sub("", text)
+    text = FAKE_FUNCTION_TAG_RE.sub("", text)
+    text = DANGLING_FUNCTION_TAG_RE.sub("", text)
+    text = FENCED_CODE_BLOCK_RE.sub("", text)
     return text.strip()
 
 # Matches the "[STATE]{"hp":18,"max_hp":30,...}[/STATE]" JSON block the model
@@ -381,9 +384,28 @@ ATTR_MARKER_RE = re.compile(r"\[ATTR:([^\]]+)\]")
 
 # Strip fake "function call" text the model sometimes writes instead of a real tool call
 FAKE_FUNCTION_CALL_RE = re.compile(
-    r"(?:^|\n)\s*(?:update_character_state|set_character_attributes|update_journal)\s*\([^)]*\)\s*",
+    r"(?:^|\n)\s*(?:update_character_state|set_character_attributes|update_journal|initialize_character)\s*\([^)]*\)\s*",
     re.MULTILINE | re.IGNORECASE,
 )
+
+# Another shape the model sometimes writes instead of a real tool call: an
+# XML-ish "<function=update_character_state>{...}</function>" block, most
+# often seen on calls where tools were deliberately removed (see
+# NO_INLINE_STATE_NOTE) so the model has no real function to call and
+# apparently sometimes fakes one in text instead. Stripped defensively, same
+# spirit as FAKE_FUNCTION_CALL_RE above, so it never reaches the player.
+FAKE_FUNCTION_TAG_RE = re.compile(r"<function[^>]*>.*?</function\s*>", re.DOTALL | re.IGNORECASE)
+
+# Same shape but with the closing tag missing (e.g. the reply got cut off
+# mid-block) — strip from the opening tag to the end rather than leaving a
+# dangling tag visible to the player.
+DANGLING_FUNCTION_TAG_RE = re.compile(r"<function[^>]*>.*$", re.DOTALL | re.IGNORECASE)
+
+# A third shape: a fenced code block (```json {...} ``` or similar) used to
+# dump state/journal data as text. Ordinary narration never legitimately
+# contains a code fence, so any one that appears is defensively stripped
+# whole, regardless of what's inside it.
+FENCED_CODE_BLOCK_RE = re.compile(r"```[a-zA-Z]*\s*\n?.*?```", re.DOTALL)
 
 SYSTEM_PROMPT = """\
 You are an experienced, vivid Dungeon Master running an interactive text \
@@ -976,9 +998,11 @@ NO_INLINE_STATE_NOTE = (
     "moment are all being collected separately, right after this reply, by other dedicated "
     "calls. So for THIS reply: do not report, describe, list, or even casually mention any of "
     "those values in your text, in ANY form — no JSON, no [STATE]/[ATTRS]-style tags, no "
-    "parenthetical stat lines, no \"(hp: 20/20)\" asides. Just write the narration (and numbered "
-    "options, where this turn calls for them) as ordinary prose, exactly as if those systems "
-    "didn't exist for this one reply."
+    "parenthetical stat lines, no \"(hp: 20/20)\" asides, no fenced ```code blocks```, and no "
+    "fake tool-call syntax like \"<function=update_character_state>...</function>\" — there is "
+    "no real function to call in this reply at all, so never write anything that looks like one, "
+    "in any format. Just write the narration (and numbered options, where this turn calls for "
+    "them) as ordinary prose, exactly as if those systems didn't exist for this one reply."
 )
 
 
