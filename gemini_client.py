@@ -1398,6 +1398,28 @@ async def generate_character_sheet(
     return clean_text, state, attrs
 
 
+def _backstory_note(who: str) -> str:
+    return (
+        "OPENING LENGTH AND CONTENT: this is the very first scene, so for THIS reply only, "
+        "ignore the usual 3-6 sentence limit and write a somewhat longer opening — roughly "
+        "8-12 sentences before the options. Weave the world, " + who + " and the current "
+        "situation into ONE coherent story: briefly explain what happened BEFORE this moment "
+        "(the recent events or background that led to it), why the story begins in this exact "
+        "place right now, and what is at stake or what pressing problem opens the scene. Let "
+        "the backstory follow from the given description(s) and the world instead of being "
+        "generic, and blend it into the scene as it unfolds rather than delivering it as a "
+        "lecture. Then end on the immediate decision point that the numbered options respond to."
+    )
+
+
+SOLO_BACKSTORY_NOTE = _backstory_note("the character")
+PARTY_BACKSTORY_NOTE = _backstory_note("every character in the party") + (
+    " Explain what brings these particular characters together in this place and whether "
+    "they already know each other — give each one a clear reason to be here that ties into "
+    "their own description."
+)
+
+
 async def generate_party_opening(
     category_label: str,
     category_hint: str,
@@ -1443,6 +1465,7 @@ async def generate_party_opening(
         "the end of your reply are for them to choose from.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
         "with the whole party present, then the list of action options.\n\n"
+        f"{PARTY_BACKSTORY_NOTE}\n\n"
         f"{NO_INLINE_STATE_NOTE}"
     )
     if soften:
@@ -1502,6 +1525,7 @@ async def generate_new_adventure_opening(
         "THIS IS A NEW CHARACTER BEING CREATED.\n\n"
         "Begin a new short adventure: describe the setting, the hook, and the opening scene "
         "with the character, then the list of action options.\n\n"
+        f"{SOLO_BACKSTORY_NOTE}\n\n"
         f"{NO_INLINE_STATE_NOTE}"
     )
     if soften:
