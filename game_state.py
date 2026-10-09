@@ -43,6 +43,13 @@ class GameState:
     # since they describe the world, not the character.
     location: dict | None = None  # {"name": ..., "description": ...} or None
     visited_locations: list[str] = field(default_factory=list)
+    # Every visited location, keyed by name: {"description": ..., "connected_from":
+    # <name of the location traveled from, or None for the first one>}. Builds
+    # the schematic map (see core.py's location_graph_edges / the frontend's
+    # map view) — unlike `location` (only the current one) and
+    # `visited_locations` (just names, no structure), this keeps enough to
+    # draw how locations connect to each other.
+    location_graph: dict = field(default_factory=dict)
     npcs: dict = field(default_factory=dict)  # name -> {"description": ..., "relationship": ...}
     quests: dict = field(default_factory=dict)  # title -> {"status": ..., "description": ...}
 
@@ -57,6 +64,7 @@ class GameState:
             "pending_options": self.pending_options,
             "location": self.location,
             "visited_locations": self.visited_locations,
+            "location_graph": self.location_graph,
             "npcs": self.npcs,
             "quests": self.quests,
         })
@@ -75,6 +83,7 @@ class GameState:
             pending_options=data.get("pending_options", []),
             location=data.get("location"),
             visited_locations=data.get("visited_locations", []),
+            location_graph=data.get("location_graph", {}),
             npcs=data.get("npcs", {}),
             quests=data.get("quests", {}),
         )

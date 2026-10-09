@@ -135,9 +135,23 @@ def apply_journal_update(target, journal: dict) -> None:
     location = journal.get("location")
     if location and location.get("name"):
         name = str(location["name"])
-        target.location = {"name": name, "description": str(location.get("description") or "")}
+        description = str(location.get("description") or "")
+        target.location = {"name": name, "description": description}
         if name not in target.visited_locations:
             target.visited_locations.append(name)
+        # Builds the schematic map: keep every visited location's description
+        # and which already-known location it was reached from (reported at
+        # most once, the turn it's first discovered — see SYSTEM_PROMPT rule
+        # 13 and UPDATE_JOURNAL_FUNCTION's connected_from). A revisit later
+        # only updates the description, never overwrites a real
+        # connected_from with a missing one.
+        node = dict(target.location_graph.get(name, {}))
+        if description:
+            node["description"] = description
+        connected_from = location.get("connected_from")
+        if connected_from and not node.get("connected_from"):
+            node["connected_from"] = str(connected_from)
+        target.location_graph[name] = node
 
     for npc in journal.get("npcs") or []:
         name = npc.get("name") if isinstance(npc, dict) else None
@@ -167,6 +181,9 @@ def journal_payload(target) -> dict:
     return {
         "location": target.location,
         "visited_locations": target.visited_locations,
+        "location_graph": [
+            {"name": name, **info} for name, info in target.location_graph.items()
+        ],
         "npcs": [{"name": name, **info} for name, info in target.npcs.items()],
         "quests": [{"title": title, **info} for title, info in target.quests.items()],
     }
@@ -241,6 +258,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
 
     category_key = game.character.get("category")
     category_hint = wc.short_hint_for(category_key) if category_key else None
+    current_location_name = (game.location or {}).get("name")
 
     try:
         clean_text, parsed_state, journal = await gemini_client.generate_story_turn(
@@ -250,6 +268,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
             player_input=player_input,
             language_name=lang.prompt_name_for(lang_key),
             category_hint=category_hint,
+            current_location_name=current_location_name,
         )
         used_last_resort = False
     except gemini_client.ContentBlockedError:
@@ -262,6 +281,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
                 player_input=player_input,
                 language_name=lang.prompt_name_for(lang_key),
                 category_hint=category_hint,
+                current_location_name=current_location_name,
                 soften=True,
             )
             used_last_resort = False
@@ -279,6 +299,7 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
                 player_input=player_input,
                 language_name=lang.prompt_name_for(lang_key),
                 category_hint=category_hint,
+                current_location_name=current_location_name,
                 soften=True,
             )
             used_last_resort = True

@@ -556,6 +556,52 @@
     background: var(--bg);
     color: var(--hint);
   }
+  /* --- Schematic location map (graph of visited places, see renderLocationMap) --- */
+  .loc-map-hint {
+    font-size: 12px;
+    color: var(--hint);
+    margin-bottom: 8px;
+  }
+  .loc-map-wrap {
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    margin-bottom: 14px;
+    border-radius: 12px;
+    background: var(--card);
+    padding: 6px 0;
+  }
+  .loc-map-wrap svg { display: block; }
+  .loc-map-edge {
+    stroke: var(--hint);
+    stroke-width: 1.5;
+    opacity: 0.55;
+  }
+  .loc-map-node-circle {
+    fill: var(--bg);
+    stroke: var(--hint);
+    stroke-width: 1.5;
+    cursor: pointer;
+  }
+  .loc-map-node.current .loc-map-node-circle {
+    fill: var(--attr);
+    stroke: var(--attr);
+    opacity: 0.9;
+  }
+  .loc-map-node.selected .loc-map-node-circle {
+    stroke: var(--attr);
+    stroke-width: 2.5;
+  }
+  .loc-map-node-label {
+    font-size: 10px;
+    fill: var(--text);
+    text-anchor: middle;
+    pointer-events: none;
+  }
+  .loc-map-node.current .loc-map-node-label {
+    fill: var(--btn-text);
+    font-weight: 700;
+  }
   .npc-card, .quest-card {
     padding: 12px 14px;
     border-radius: 12px;
@@ -865,6 +911,10 @@ function localizeStaticUI() {
 let lastCharacter = null;
 let lastLog = [];
 let lastJournal = {};
+// Which location-map node is currently tapped open (shows its description
+// below the map) — resets to the character's current location by default
+// each time the journal re-renders with a different one.
+let selectedMapLocation = null;
 let diceInterval = null;
 let currentThemeIcon = "";
 let useCategoryTheme = localStorage.getItem("useCategoryTheme") !== "false"; // default: on
@@ -1068,29 +1118,149 @@ function renderJournal() {
     `).join("");
   }
 
-  // Locations
+  renderLocationsPanel(j);
+}
+
+// --- Schematic location map -------------------------------------------
+//
+// Draws every visited location as a node, connected to the already-known
+// place it was reached from (location_graph's "connected_from", see
+// core.py's apply_journal_update / gemini_client.py's UPDATE_JOURNAL_FUNCTION).
+// This is deliberately NOT a geographic/illustrated map — Gemini can't keep
+// cardinal directions or a consistent art style across many separate turns —
+// just a simple node-and-line diagram of how places connect, like a
+// quest-log map in a text adventure.
+
+function renderLocationsPanel(j) {
   const locationsEl = document.getElementById("journalPanelLocations");
+  const graph = j.location_graph || [];
   const visited = j.visited_locations || [];
   if (!j.location && !visited.length) {
     locationsEl.innerHTML = `<div class="empty-note">${t("no_locations_note")}</div>`;
-  } else {
-    let html = "";
-    if (j.location) {
-      html += `
-        <div class="location-card">
-          <div class="location-name">📍 ${escapeHtml(j.location.name || "")}</div>
-          ${j.location.description ? `<div class="location-desc">${escapeHtml(j.location.description)}</div>` : ""}
-        </div>
-      `;
-    }
-    const others = visited.filter(name => !j.location || name !== j.location.name);
-    if (others.length) {
-      html += `<div class="visited-chip-row">` +
-        others.map(name => `<span class="visited-chip">${escapeHtml(name)}</span>`).join("") +
-        `</div>`;
-    }
-    locationsEl.innerHTML = html;
+    return;
   }
+  const currentName = j.location ? j.location.name : null;
+  // Default the open detail card to wherever the party currently is, the
+  // first time there's something to show.
+  if (selectedMapLocation == null && currentName) selectedMapLocation = currentName;
+
+  let html = "";
+  if (graph.length) {
+    html += `<div class="loc-map-hint">${escapeHtml(t("tap_location_hint"))}</div>`;
+    html += renderLocationMapSvg(graph, currentName);
+  }
+
+  // Detail card for whichever node is selected (falls back to the current
+  // location's own card if nothing in location_graph matched, e.g. very old
+  // save data from before location_graph existed).
+  const selected = graph.find(n => n.name === selectedMapLocation);
+  if (selected) {
+    html += `
+      <div class="location-card">
+        <div class="location-name">${selected.name === currentName ? "📍 " : ""}${escapeHtml(selected.name)}</div>
+        ${selected.description ? `<div class="location-desc">${escapeHtml(selected.description)}</div>` : ""}
+      </div>
+    `;
+  } else if (j.location) {
+    html += `
+      <div class="location-card">
+        <div class="location-name">📍 ${escapeHtml(j.location.name || "")}</div>
+        ${j.location.description ? `<div class="location-desc">${escapeHtml(j.location.description)}</div>` : ""}
+      </div>
+    `;
+  }
+  locationsEl.innerHTML = html;
+}
+
+function selectMapLocation(name) {
+  selectedMapLocation = name;
+  renderJournal();
+}
+
+// Lays out location_graph (a flat list of {name, description, connected_from})
+// as a simple top-down tree: each node's parent is the location it was
+// connected_from; nodes with no known/matching parent become their own
+// root. Leaves get sequential x slots left-to-right; a parent is centered
+// over the average x of its children. Returns {nodes, maxX, maxDepth}
+// with each node annotated with .x/.depth, or null if nothing to draw.
+function layoutLocationGraph(graph) {
+  if (!graph.length) return null;
+  const byName = {};
+  graph.forEach(n => { byName[n.name] = { ...n, children: [] }; });
+  const roots = [];
+  Object.values(byName).forEach(n => {
+    const parent = n.connected_from && byName[n.connected_from] && byName[n.connected_from] !== n
+      ? byName[n.connected_from] : null;
+    if (parent) parent.children.push(n);
+    else roots.push(n);
+  });
+  let xCounter = 0;
+  const place = (n, depth, seen) => {
+    // seen guards against a malformed cycle (shouldn't happen given how
+    // connected_from is written, but never trust model output blindly).
+    if (seen.has(n.name)) { n.depth = depth; n.x = xCounter++; return; }
+    seen.add(n.name);
+    n.depth = depth;
+    if (!n.children.length) {
+      n.x = xCounter++;
+    } else {
+      n.children.forEach(c => place(c, depth + 1, seen));
+      n.x = n.children.reduce((sum, c) => sum + c.x, 0) / n.children.length;
+    }
+  };
+  roots.forEach(r => place(r, 0, new Set()));
+  const nodes = Object.values(byName);
+  const maxX = Math.max(...nodes.map(n => n.x));
+  const maxDepth = Math.max(...nodes.map(n => n.depth));
+  return { nodes, maxX, maxDepth };
+}
+
+function renderLocationMapSvg(graph, currentName) {
+  const layout = layoutLocationGraph(graph);
+  if (!layout) return "";
+  const xSpacing = 86, ySpacing = 64, pad = 40, r = 22;
+  const width = (layout.maxX + 1) * xSpacing + pad;
+  const height = (layout.maxDepth + 1) * ySpacing + pad;
+  const cx = n => pad / 2 + n.x * xSpacing + xSpacing / 2;
+  const cy = n => pad / 2 + n.depth * ySpacing + ySpacing / 2;
+
+  let edges = "";
+  layout.nodes.forEach(n => {
+    if (n.connected_from) {
+      const parent = layout.nodes.find(p => p.name === n.connected_from);
+      if (parent) {
+        edges += `<line class="loc-map-edge" x1="${cx(parent)}" y1="${cy(parent)}" x2="${cx(n)}" y2="${cy(n)}" />`;
+      }
+    }
+  });
+
+  let nodesHtml = "";
+  layout.nodes.forEach(n => {
+    const isCurrent = n.name === currentName;
+    const isSelected = n.name === selectedMapLocation;
+    const label = n.name.length > 14 ? n.name.slice(0, 13) + "…" : n.name;
+    const cls = ["loc-map-node", isCurrent ? "current" : "", isSelected ? "selected" : ""].filter(Boolean).join(" ");
+    // JSON.stringify safely escapes quotes/backslashes for the JS call
+    // itself; the attribute is then single-quoted and "&" escaped so an
+    // unusual location name (quotes, "&", etc. — this is free text Gemini
+    // wrote) can never break out of the onclick attribute.
+    const jsArg = JSON.stringify(n.name).replace(/&/g, "&amp;");
+    nodesHtml += `
+      <g class="${cls}" onclick='selectMapLocation(${jsArg})'>
+        <circle class="loc-map-node-circle" cx="${cx(n)}" cy="${cy(n)}" r="${r}"></circle>
+        <text class="loc-map-node-label" x="${cx(n)}" y="${cy(n) + r + 12}">${escapeHtml(label)}</text>
+      </g>
+    `;
+  });
+
+  return `
+    <div class="loc-map-wrap">
+      <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+        ${edges}
+        ${nodesHtml}
+      </svg>
+    </div>
+  `;
 }
 
 function openMenu() {
@@ -1768,6 +1938,7 @@ function showWizardError(data) {
 
 function startOnboarding() {
   cameFromActiveGame = false;
+  selectedMapLocation = null;
   wizard = {
     language: null, uiStrings: null, category: null, worldDescription: null,
     characterDescription: null, gender: null, age: null, currentPreview: null,

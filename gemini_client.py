@@ -156,6 +156,19 @@ UPDATE_JOURNAL_FUNCTION = FunctionDeclaration(
                 "properties": {
                     "name": {"type": "string", "description": "Short place name, e.g. 'The Rusty Anchor tavern'."},
                     "description": {"type": "string", "description": "One short sentence about this place."},
+                    "connected_from": {
+                        "type": "string",
+                        "description": (
+                            "ONLY when the party just traveled here directly from another location "
+                            "already known in this adventure: that previous location's name, copied "
+                            "EXACTLY as it was given before (same spelling/case) — this is what lets "
+                            "a map of how locations connect to each other be drawn. Omit entirely if "
+                            "this is the very first location of the adventure, if you're not sure "
+                            "which known location they just came from, or if the connection isn't a "
+                            "simple direct travel (e.g. they were teleported/knocked out and woke up "
+                            "somewhere unrelated)."
+                        ),
+                    },
                 },
                 "required": ["name"],
             },
@@ -585,7 +598,11 @@ Follow these rules on every reply:
     never the whole known world. Specifically:
     - Location: call it with {{name, description}} only on the turn the party \
       actually arrives somewhere new and nameable. Don't re-report the same \
-      location turn after turn.
+      location turn after turn. If they just traveled there directly from a \
+      previously known location, also include connected_from with that \
+      location's exact name — this builds a map of the adventure as it's \
+      explored. Leave connected_from out for the very first location, or if \
+      the "journey" doesn't make sense as a direct connection.
     - NPCs: call it with an NPC entry only when a new named NPC is properly \
       introduced, or an existing one's relationship to the party \
       meaningfully shifts (e.g. from neutral to hostile, or they make a \
@@ -791,7 +808,9 @@ async def _extract_turn_state(
     return _extract_function_args(response, "update_character_state") or {}
 
 
-async def _extract_turn_journal(narration_text: str, language_name: str) -> dict:
+async def _extract_turn_journal(
+    narration_text: str, language_name: str, current_location_name: str | None = None
+) -> dict:
     """Dedicated forced call that records any journal-worthy change (new/
     changed location, NPC, or quest) from an ordinary story turn's
     narration text, decoupled from the call that wrote that narration. See
@@ -800,16 +819,27 @@ async def _extract_turn_journal(narration_text: str, language_name: str) -> dict
     update_journal with no fields in that case, and _extract_journal already
     treats an empty call as "no change" downstream. Never raises — on any
     failure this just returns {} and the turn proceeds without a journal
-    update, same as if Gemini had simply not reported anything."""
+    update, same as if Gemini had simply not reported anything.
+
+    current_location_name, when known, is given so that if this turn moves
+    the party somewhere new, the model can set the new location's
+    connected_from to the right already-known name (see UPDATE_JOURNAL_FUNCTION)
+    instead of guessing or leaving the map disconnected."""
     model = get_journal_only_model()
+    location_context = (
+        f"The party's location before this turn: {current_location_name}\n\n"
+        if current_location_name else ""
+    )
     prompt = (
         f"Text fields in your function call should be in: {language_name}.\n\n"
         "Below is one turn of an ongoing adventure. Call update_journal exactly once. Include "
         "a field ONLY if this specific turn actually introduced or changed it: the party's "
-        "location (only on the turn they arrive somewhere new and nameable), an NPC newly met "
+        "location (only on the turn they arrive somewhere new and nameable — set connected_from "
+        "to the previous location given below if they traveled directly from it), an NPC newly met "
         "or whose relationship to the party meaningfully shifted, or a quest/goal newly given, "
         "updated, completed, or failed. Most turns change none of these — if so, call "
         "update_journal with no fields at all rather than repeating anything already known.\n\n"
+        f"{location_context}"
         f"This turn:\n{narration_text}"
     )
     try:
@@ -1085,6 +1115,7 @@ async def generate_story_turn(
     category_hint: str | None = None,
     party_note: str | None = None,
     acting_name: str | None = None,
+    current_location_name: str | None = None,
     soften: bool = False,
 ) -> tuple[str, dict, dict]:
     """Generate one ordinary story turn: narration + options, plus the
@@ -1133,7 +1164,7 @@ async def generate_story_turn(
     text = _extract_text(response)
     clean_text, _ = parse_state_tag(text)  # defensive: strip a stray legacy tag if one appears
     state = await _extract_turn_state(clean_text, player_input, character, language_name)
-    journal = await _extract_turn_journal(clean_text, language_name)
+    journal = await _extract_turn_journal(clean_text, language_name, current_location_name)
     _log_turn_result("generate_story_turn", clean_text, state, journal=journal)
     return clean_text, state, journal
 

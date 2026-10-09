@@ -94,6 +94,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
     # several real players reading the same text, addressing one of them as
     # "you" every turn is ambiguous and jarring for the rest of the party.
     acting_name = seat.display_name
+    current_location_name = (room.location or {}).get("name")
 
     room.add_turn(f"[{seat.display_name}]: {player_input}")
 
@@ -111,6 +112,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
             category_hint=category_hint,
             party_note=party_note,
             acting_name=acting_name,
+            current_location_name=current_location_name,
         )
         used_last_resort = False
     except gemini_client.ContentBlockedError:
@@ -125,6 +127,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
                 category_hint=category_hint,
                 party_note=party_note,
                 acting_name=acting_name,
+                current_location_name=current_location_name,
                 soften=True,
             )
             used_last_resort = False
@@ -139,6 +142,7 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
                 category_hint=category_hint,
                 party_note=party_note,
                 acting_name=acting_name,
+                current_location_name=current_location_name,
                 soften=True,
             )
             used_last_resort = True

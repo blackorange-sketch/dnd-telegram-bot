@@ -100,6 +100,10 @@ class RoomState:
     # these belong to the room, not any one seat.
     location: dict | None = None  # {"name": ..., "description": ...} or None
     visited_locations: list[str] = field(default_factory=list)
+    # Every visited location, keyed by name: {"description": ..., "connected_from":
+    # <name of the location traveled from, or None for the first one>} — see
+    # the matching field on game_state.GameState for why this exists.
+    location_graph: dict = field(default_factory=dict)
     npcs: dict = field(default_factory=dict)  # name -> {"description": ..., "relationship": ...}
     quests: dict = field(default_factory=dict)  # title -> {"status": ..., "description": ...}
 
@@ -145,6 +149,7 @@ class RoomState:
             "started": self.started,
             "location": self.location,
             "visited_locations": self.visited_locations,
+            "location_graph": self.location_graph,
             "npcs": self.npcs,
             "quests": self.quests,
         })
@@ -173,6 +178,7 @@ class RoomState:
             started=data.get("started", False),
             location=data.get("location"),
             visited_locations=data.get("visited_locations", []),
+            location_graph=data.get("location_graph", {}),
             npcs=data.get("npcs", {}),
             quests=data.get("quests", {}),
         )
