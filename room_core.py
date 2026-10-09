@@ -42,12 +42,17 @@ def _party_roster_note(room: RoomState, acting_user_id: int) -> str | None:
 
 
 def party_status(room: RoomState) -> list[dict]:
-    """Compact per-seat summary: user_id, display_name, hp, max_hp, is_turn."""
+    """Compact per-seat summary: user_id, display_name, character_name, hp,
+    max_hp, is_turn. character_name is the in-fiction name Gemini gave this
+    character at creation (see the "name" field on initialize_character in
+    gemini_client.py) — None for a character created before this existed,
+    in which case the frontend just falls back to display_name alone."""
     active = room.current_turn_user_id()
     return [
         {
             "user_id": uid,
             "display_name": room.seats[uid].display_name,
+            "character_name": room.seats[uid].character.get("name"),
             "hp": room.seats[uid].character.get("hp"),
             "max_hp": room.seats[uid].character.get("max_hp"),
             "is_turn": uid == active,
@@ -229,6 +234,8 @@ async def create_character_for_seat(
     character_record["world_description"] = room.world_description
     character_record["hp"] = hp
     character_record["max_hp"] = max_hp
+    if parsed_state.get("name"):
+        character_record["name"] = parsed_state["name"]
     if "money" in parsed_state:
         character_record["money"] = parsed_state["money"]
     if "inventory" in parsed_state:

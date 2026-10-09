@@ -1204,7 +1204,13 @@ function renderParty(party, activeUserId) {
   const rows = party.map(p => {
     const mark = p.user_id === activeUserId ? "👉 " : "";
     const hp = (p.hp != null && p.max_hp != null) ? ` ❤️${p.hp}/${p.max_hp}` : "";
-    return `<div>${mark}${escapeHtml(p.display_name)}${hp}</div>`;
+    // character_name is the in-fiction name Gemini gave this character at
+    // creation — shown next to the player's own login so the party list
+    // reads like a cast list, not just a list of Telegram accounts. Older
+    // characters created before this existed have no character_name, so
+    // this falls back to just the login alone.
+    const charName = p.character_name ? ` (${escapeHtml(p.character_name)})` : "";
+    return `<div>${mark}${escapeHtml(p.display_name)}${charName}${hp}</div>`;
   }).join("");
   const codeLine = roomId
     ? `<div style="margin-top:6px;color:var(--hint);font-size:13px;">${t("room_code_label")}: <b>${escapeHtml(roomId)}</b></div>`

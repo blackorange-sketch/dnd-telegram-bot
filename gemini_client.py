@@ -235,12 +235,20 @@ GAME_TOOLS = Tool(function_declarations=[UPDATE_STATE_FUNCTION, SET_ATTRIBUTES_F
 INIT_CHARACTER_FUNCTION = FunctionDeclaration(
     name="initialize_character",
     description=(
-        "Report the brand-new character's starting hp/max_hp/money/inventory/attributes, all "
-        "together in this one call, right after writing the opening narration."
+        "Report the brand-new character's name and starting hp/max_hp/money/inventory/attributes, "
+        "all together in this one call, right after writing the opening narration."
     ),
     parameters={
         "type": "object",
         "properties": {
+            "name": {
+                "type": "string",
+                "description": (
+                    "The character's name, exactly as established in the narration/write-up you "
+                    "just wrote (first name, or first+last — whatever fits how they were "
+                    "introduced). Never leave this out, even if the narration only used it once."
+                ),
+            },
             "hp": {"type": "integer", "description": "Starting HP."},
             "max_hp": {"type": "integer", "description": "Max HP."},
             "money": {
@@ -282,7 +290,7 @@ INIT_CHARACTER_FUNCTION = FunctionDeclaration(
                 },
             },
         },
-        "required": ["hp", "max_hp", "money", "inventory", "attributes"],
+        "required": ["name", "hp", "max_hp", "money", "inventory", "attributes"],
     },
 )
 
@@ -824,9 +832,11 @@ async def _extract_opening_character_init(
     prompt = (
         f"Text fields in your function call should be in: {language_name}.\n\n"
         "A brand-new character was just created for a new adventure. Call initialize_character "
-        "exactly once with their starting hp, max_hp, money, inventory, and 4-5 attributes (1-10 "
-        f"each), fitting the character and the opening scene below. Start at full health: "
-        f"hp=max_hp={DEFAULT_HP} unless the character description implies a different max HP.\n\n"
+        "exactly once with their name (exactly as given/implied in the opening scene below — if it "
+        "never used one explicitly, invent a short fitting name now), starting hp, max_hp, money, "
+        "inventory, and 4-5 attributes (1-10 each), fitting the character and the opening scene "
+        f"below. Start at full health: hp=max_hp={DEFAULT_HP} unless the character description "
+        "implies a different max HP.\n\n"
         f"Character description: {character_brief}\n\n"
         f"Opening scene:\n{narration_text}"
     )

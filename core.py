@@ -419,6 +419,8 @@ async def create_adventure(
     character_record["world_description"] = world_description
     character_record["hp"] = hp
     character_record["max_hp"] = max_hp
+    if parsed_state.get("name"):
+        character_record["name"] = parsed_state["name"]
     if "money" in parsed_state:
         character_record["money"] = parsed_state["money"]
     if "inventory" in parsed_state:
