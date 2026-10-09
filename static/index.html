@@ -1150,6 +1150,21 @@ function renderLocationsPanel(j) {
     html += renderLocationMapSvg(graph, currentName);
   }
 
+  // Delegated click handler, bound once to this (stable) container rather
+  // than as inline onclick="" attributes on the SVG nodes themselves — the
+  // nodes get replaced on every re-render (innerHTML below), but inline
+  // onclick on dynamically-injected SVG <g> elements turned out unreliable
+  // in Telegram's WebView, so this binds to locationsEl itself (which is
+  // never replaced, only its contents) and reads which node was tapped from
+  // its data-name attribute via event delegation instead.
+  if (!locationsEl.dataset.mapClickBound) {
+    locationsEl.addEventListener("click", (e) => {
+      const node = e.target.closest(".loc-map-node");
+      if (node && node.dataset.name) selectMapLocation(node.dataset.name);
+    });
+    locationsEl.dataset.mapClickBound = "1";
+  }
+
   // Detail card for whichever node is selected (falls back to the current
   // location's own card if nothing in location_graph matched, e.g. very old
   // save data from before location_graph existed).
@@ -1240,13 +1255,8 @@ function renderLocationMapSvg(graph, currentName) {
     const isSelected = n.name === selectedMapLocation;
     const label = n.name.length > 14 ? n.name.slice(0, 13) + "…" : n.name;
     const cls = ["loc-map-node", isCurrent ? "current" : "", isSelected ? "selected" : ""].filter(Boolean).join(" ");
-    // JSON.stringify safely escapes quotes/backslashes for the JS call
-    // itself; the attribute is then single-quoted and "&" escaped so an
-    // unusual location name (quotes, "&", etc. — this is free text Gemini
-    // wrote) can never break out of the onclick attribute.
-    const jsArg = JSON.stringify(n.name).replace(/&/g, "&amp;");
     nodesHtml += `
-      <g class="${cls}" onclick='selectMapLocation(${jsArg})'>
+      <g class="${cls}" data-name="${escapeAttr(n.name)}">
         <circle class="loc-map-node-circle" cx="${cx(n)}" cy="${cy(n)}" r="${r}"></circle>
         <text class="loc-map-node-label" x="${cx(n)}" y="${cy(n) + r + 12}">${escapeHtml(label)}</text>
       </g>
@@ -1546,6 +1556,13 @@ async function api(path, body) {
     body: JSON.stringify({ initData, ...body }),
   });
   return res.json();
+}
+
+// For values placed inside a double-quoted HTML attribute (e.g. data-name="...").
+// escapeHtml above doesn't touch quotes, so a name containing " would
+// otherwise end the attribute early.
+function escapeAttr(str) {
+  return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 function escapeHtml(str) {
