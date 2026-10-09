@@ -113,6 +113,8 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
             party_note=party_note,
             acting_name=acting_name,
             current_location_name=current_location_name,
+            known_npcs=room.npcs,
+            known_quests=room.quests,
         )
         used_last_resort = False
     except gemini_client.ContentBlockedError:
@@ -128,6 +130,8 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
                 party_note=party_note,
                 acting_name=acting_name,
                 current_location_name=current_location_name,
+                known_npcs=room.npcs,
+                known_quests=room.quests,
                 soften=True,
             )
             used_last_resort = False
@@ -143,6 +147,8 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
                 party_note=party_note,
                 acting_name=acting_name,
                 current_location_name=current_location_name,
+                known_npcs=room.npcs,
+                known_quests=room.quests,
                 soften=True,
             )
             used_last_resort = True

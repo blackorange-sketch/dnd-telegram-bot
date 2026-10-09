@@ -123,6 +123,37 @@ def normalize_inventory(items) -> list[dict]:
     return normalized
 
 
+def _find_existing_key(existing: dict, name: str) -> str:
+    """Return the key in `existing` that `name` most plausibly refers to, or
+    `name` itself if it looks genuinely new. Safety net on top of the prompt
+    (which already tells the model to reuse exact names): catches case/
+    punctuation differences, one name containing the other ("Marta" vs
+    "Marta the innkeeper"), and near-identical spellings, so the journal
+    doesn't grow a second entry for the same NPC/quest."""
+    import difflib
+
+    def norm(x: str) -> str:
+        return " ".join("".join(c if c.isalnum() else " " for c in x.casefold()).split())
+
+    target = norm(name)
+    if not target:
+        return name
+    best, best_score = None, 0.0
+    for key in existing:
+        k = norm(key)
+        if not k:
+            continue
+        if k == target:
+            return key
+        score = difflib.SequenceMatcher(None, k, target).ratio()
+        shorter, longer = sorted((k, target), key=len)
+        if len(shorter) >= 4 and (f" {shorter} " in f" {longer} "):
+            score = max(score, 0.9)
+        if score > best_score:
+            best, best_score = key, score
+    return best if best is not None and best_score >= 0.82 else name
+
+
 def apply_journal_update(target, journal: dict) -> None:
     """Merge an update_journal function-call result into a GameState or
     RoomState (both expose the same .location/.visited_locations/.npcs/
@@ -157,6 +188,7 @@ def apply_journal_update(target, journal: dict) -> None:
         name = npc.get("name") if isinstance(npc, dict) else None
         if not name:
             continue
+        name = _find_existing_key(target.npcs, str(name))
         existing = target.npcs.get(name, {})
         target.npcs[name] = {
             "description": npc.get("description", existing.get("description", "")),
@@ -167,6 +199,7 @@ def apply_journal_update(target, journal: dict) -> None:
         title = quest.get("title") if isinstance(quest, dict) else None
         if not title:
             continue
+        title = _find_existing_key(target.quests, str(title))
         existing = target.quests.get(title, {})
         target.quests[title] = {
             "status": quest.get("status", existing.get("status", "active")),
@@ -269,6 +302,8 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
             language_name=lang.prompt_name_for(lang_key),
             category_hint=category_hint,
             current_location_name=current_location_name,
+            known_npcs=game.npcs,
+            known_quests=game.quests,
         )
         used_last_resort = False
     except gemini_client.ContentBlockedError:
@@ -282,6 +317,8 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
                 language_name=lang.prompt_name_for(lang_key),
                 category_hint=category_hint,
                 current_location_name=current_location_name,
+                known_npcs=game.npcs,
+                known_quests=game.quests,
                 soften=True,
             )
             used_last_resort = False
@@ -300,6 +337,8 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
                 language_name=lang.prompt_name_for(lang_key),
                 category_hint=category_hint,
                 current_location_name=current_location_name,
+                known_npcs=game.npcs,
+                known_quests=game.quests,
                 soften=True,
             )
             used_last_resort = True

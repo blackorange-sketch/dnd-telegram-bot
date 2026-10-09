@@ -882,8 +882,29 @@ async def _extract_turn_state(
     return _extract_function_args(response, "update_character_state") or {}
 
 
+def _format_known_journal(known_npcs: dict | None, known_quests: dict | None) -> str:
+    """Compact list of what the journal already holds, so the extractor can
+    reuse the exact names/titles instead of inventing a second entry for the
+    same NPC/quest (which is what used to produce duplicates)."""
+    lines = []
+    if known_npcs:
+        lines.append("Known NPCs (reuse the EXACT name if it is the same person):")
+        for n, info in list(known_npcs.items())[-30:]:
+            rel = (info or {}).get("relationship") or ""
+            lines.append(f"- {n}" + (f" ({rel})" if rel else ""))
+    if known_quests:
+        lines.append("Known quests (reuse the EXACT title if it is the same goal):")
+        for t, info in list(known_quests.items())[-30:]:
+            lines.append(f"- {t} [{(info or {}).get('status', 'active')}]")
+    return ("\n".join(lines) + "\n\n") if lines else ""
+
+
 async def _extract_turn_journal(
-    narration_text: str, language_name: str, current_location_name: str | None = None
+    narration_text: str,
+    language_name: str,
+    current_location_name: str | None = None,
+    known_npcs: dict | None = None,
+    known_quests: dict | None = None,
 ) -> dict:
     """Dedicated forced call that records any journal-worthy change (new/
     changed location, NPC, or quest) from an ordinary story turn's
@@ -913,6 +934,15 @@ async def _extract_turn_journal(
         "or whose relationship to the party meaningfully shifted, or a quest/goal newly given, "
         "updated, completed, or failed. Most turns change none of these — if so, call "
         "update_journal with no fields at all rather than repeating anything already known.\n\n"
+        "NO DUPLICATES: if an NPC or quest in this turn is one already listed below (even if the "
+        "text refers to it by a nickname, title or different wording), use the EXACT existing "
+        "name/title from the list and only update its fields — never create a second entry for "
+        "the same person or goal. Only add a new entry for someone/something genuinely new.\n"
+        "QUEST STATUS: a quest stays 'active' ONLY while its goal is still unresolved. If this "
+        "turn shows the goal achieved, set that quest's status to 'completed'; if it became "
+        "impossible or was abandoned/lost, set 'failed'. Check every known active quest against "
+        "this turn. Do not create a separate quest for a single step of an existing quest.\n\n"
+        f"{_format_known_journal(known_npcs, known_quests)}"
         f"{location_context}"
         f"This turn:\n{narration_text}"
     )
@@ -1219,6 +1249,8 @@ async def generate_story_turn(
     party_note: str | None = None,
     acting_name: str | None = None,
     current_location_name: str | None = None,
+    known_npcs: dict | None = None,
+    known_quests: dict | None = None,
     soften: bool = False,
 ) -> tuple[str, dict, dict]:
     """Generate one ordinary story turn: narration + options, plus the
@@ -1267,7 +1299,9 @@ async def generate_story_turn(
     text = _extract_text(response)
     clean_text, _ = parse_state_tag(text)  # defensive: strip a stray legacy tag if one appears
     state = await _extract_turn_state(clean_text, player_input, character, language_name)
-    journal = await _extract_turn_journal(clean_text, language_name, current_location_name)
+    journal = await _extract_turn_journal(
+        clean_text, language_name, current_location_name, known_npcs, known_quests
+    )
     _log_turn_result("generate_story_turn", clean_text, state, journal=journal)
     return clean_text, state, journal
 
