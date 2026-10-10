@@ -52,6 +52,13 @@ class GameState:
     location_graph: dict = field(default_factory=dict)
     npcs: dict = field(default_factory=dict)  # name -> {"description": ..., "relationship": ...}
     quests: dict = field(default_factory=dict)  # title -> {"status": ..., "description": ...}
+    # Director layer (see gemini_client.build_director_note): a hidden 5-act
+    # outline written once after the opening, unresolved consequences of the
+    # player's choices to call back later, and the previous scene type so two
+    # identical beats don't repeat in a row.
+    story_arc: str = ""
+    threads: list = field(default_factory=list)
+    last_situation: str = ""
 
     def to_json(self) -> str:
         return json.dumps({
@@ -67,6 +74,9 @@ class GameState:
             "location_graph": self.location_graph,
             "npcs": self.npcs,
             "quests": self.quests,
+            "story_arc": self.story_arc,
+            "threads": self.threads,
+            "last_situation": self.last_situation,
         })
 
     @classmethod
@@ -86,6 +96,9 @@ class GameState:
             location_graph=data.get("location_graph", {}),
             npcs=data.get("npcs", {}),
             quests=data.get("quests", {}),
+            story_arc=data.get("story_arc", ""),
+            threads=data.get("threads", []),
+            last_situation=data.get("last_situation", ""),
         )
 
     def add_turn(self, text: str) -> None:

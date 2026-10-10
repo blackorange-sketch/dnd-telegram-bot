@@ -195,6 +195,23 @@ def apply_journal_update(target, journal: dict) -> None:
             "relationship": npc.get("relationship", existing.get("relationship", "")),
         }
 
+    # Open story threads (consequences to call back later). Fuzzy-matched
+    # like NPCs/quests; resolved=true removes one; capped so the list the
+    # model sees every turn stays short.
+    threads = getattr(target, "threads", None)
+    if threads is not None:
+        for th in journal.get("threads") or []:
+            text = str(th.get("text") or "").strip() if isinstance(th, dict) else ""
+            if not text:
+                continue
+            match = _find_existing_key({t: None for t in threads}, text)
+            if th.get("resolved"):
+                if match in threads:
+                    threads.remove(match)
+            elif match not in threads:
+                threads.append(text)
+        del threads[:-12]
+
     for quest in journal.get("quests") or []:
         title = quest.get("title") if isinstance(quest, dict) else None
         if not title:
@@ -292,6 +309,8 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
     category_key = game.character.get("category")
     category_hint = wc.short_hint_for(category_key) if category_key else None
     current_location_name = (game.location or {}).get("name")
+    situation = gemini_client.pick_situation(game.last_situation)
+    game.last_situation = situation
 
     try:
         clean_text, parsed_state, journal = await gemini_client.generate_story_turn(
@@ -304,6 +323,10 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
             current_location_name=current_location_name,
             known_npcs=game.npcs,
             known_quests=game.quests,
+            story_arc=game.story_arc,
+            turn_count=game.turn_count,
+            open_threads=game.threads,
+            situation=situation,
         )
         used_last_resort = False
     except gemini_client.ContentBlockedError:
@@ -319,6 +342,10 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
                 current_location_name=current_location_name,
                 known_npcs=game.npcs,
                 known_quests=game.quests,
+            story_arc=game.story_arc,
+            turn_count=game.turn_count,
+            open_threads=game.threads,
+            situation=situation,
                 soften=True,
             )
             used_last_resort = False
@@ -339,6 +366,10 @@ async def perform_turn(game: GameState, player_input: str) -> dict:
                 current_location_name=current_location_name,
                 known_npcs=game.npcs,
                 known_quests=game.quests,
+            story_arc=game.story_arc,
+            turn_count=game.turn_count,
+            open_threads=game.threads,
+            situation=situation,
                 soften=True,
             )
             used_last_resort = True
@@ -491,6 +522,7 @@ async def create_adventure(
     display_text, options = format_options(clean_text, language_key)
 
     game = GameState(user_id=user_id, character=character_record, language=language_key)
+    game.story_arc = await gemini_client.generate_story_arc(display_text, language_name)
     apply_journal_update(game, journal)
     game.add_turn(f"[DM]: {display_text}")
     game.pending_options = options

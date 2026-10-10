@@ -95,6 +95,8 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
     # "you" every turn is ambiguous and jarring for the rest of the party.
     acting_name = seat.display_name
     current_location_name = (room.location or {}).get("name")
+    situation = gemini_client.pick_situation(room.last_situation)
+    room.last_situation = situation
 
     room.add_turn(f"[{seat.display_name}]: {player_input}")
 
@@ -115,6 +117,10 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
             current_location_name=current_location_name,
             known_npcs=room.npcs,
             known_quests=room.quests,
+            story_arc=room.story_arc,
+            turn_count=room.turn_count,
+            open_threads=room.threads,
+            situation=situation,
         )
         used_last_resort = False
     except gemini_client.ContentBlockedError:
@@ -132,6 +138,10 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
                 current_location_name=current_location_name,
                 known_npcs=room.npcs,
                 known_quests=room.quests,
+            story_arc=room.story_arc,
+            turn_count=room.turn_count,
+            open_threads=room.threads,
+            situation=situation,
                 soften=True,
             )
             used_last_resort = False
@@ -149,6 +159,10 @@ async def perform_room_turn(room: RoomState, acting_user_id: int, player_input: 
                 current_location_name=current_location_name,
                 known_npcs=room.npcs,
                 known_quests=room.quests,
+            story_arc=room.story_arc,
+            turn_count=room.turn_count,
+            open_threads=room.threads,
+            situation=situation,
                 soften=True,
             )
             used_last_resort = True
@@ -304,6 +318,7 @@ async def start_room_adventure(room: RoomState) -> dict:
     display_text, options = core.format_options(clean_text, room.language)
 
     core.apply_journal_update(room, journal)
+    room.story_arc = await gemini_client.generate_story_arc(display_text, language_name, party=True)
 
     room.started = True
     room.add_turn(f"[DM]: {display_text}")

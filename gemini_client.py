@@ -192,6 +192,23 @@ UPDATE_JOURNAL_FUNCTION = FunctionDeclaration(
                     "required": ["name"],
                 },
             },
+            "threads": {
+                "type": "array",
+                "description": (
+                    "Open story threads: consequences, promises, debts, grudges, mercy shown, "
+                    "secrets or mysteries created by the player's CHOICES that should come back "
+                    "later in the story. Only report a thread the turn it is created, or with "
+                    "resolved=true on the turn it is finally paid off/closed. Skip trivia."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "One short sentence: what is left hanging and who/what it involves."},
+                        "resolved": {"type": "boolean", "description": "True only when this exact thread was closed this turn."},
+                    },
+                    "required": ["text"],
+                },
+            },
             "quests": {
                 "type": "array",
                 "description": "Only quests newly given, updated, completed, or failed this turn — not the full quest log.",
@@ -882,7 +899,9 @@ async def _extract_turn_state(
     return _extract_function_args(response, "update_character_state") or {}
 
 
-def _format_known_journal(known_npcs: dict | None, known_quests: dict | None) -> str:
+def _format_known_journal(
+    known_npcs: dict | None, known_quests: dict | None, known_threads: list | None = None
+) -> str:
     """Compact list of what the journal already holds, so the extractor can
     reuse the exact names/titles instead of inventing a second entry for the
     same NPC/quest (which is what used to produce duplicates)."""
@@ -896,6 +915,10 @@ def _format_known_journal(known_npcs: dict | None, known_quests: dict | None) ->
         lines.append("Known quests (reuse the EXACT title if it is the same goal):")
         for t, info in list(known_quests.items())[-30:]:
             lines.append(f"- {t} [{(info or {}).get('status', 'active')}]")
+    if known_threads:
+        lines.append("Known open threads (reuse the EXACT text when closing one with resolved=true):")
+        for th in known_threads[-12:]:
+            lines.append(f"- {th}")
     return ("\n".join(lines) + "\n\n") if lines else ""
 
 
@@ -905,6 +928,7 @@ async def _extract_turn_journal(
     current_location_name: str | None = None,
     known_npcs: dict | None = None,
     known_quests: dict | None = None,
+    known_threads: list | None = None,
 ) -> dict:
     """Dedicated forced call that records any journal-worthy change (new/
     changed location, NPC, or quest) from an ordinary story turn's
@@ -942,7 +966,11 @@ async def _extract_turn_journal(
         "turn shows the goal achieved, set that quest's status to 'completed'; if it became "
         "impossible or was abandoned/lost, set 'failed'. Check every known active quest against "
         "this turn. Do not create a separate quest for a single step of an existing quest.\n\n"
-        f"{_format_known_journal(known_npcs, known_quests)}"
+        "OPEN THREADS: also record in `threads` any consequence, promise, debt, grudge, mercy or "
+        "secret created by the player's choices this turn that the story should pay off later "
+        "(one short sentence each; most turns add none). If this turn closes a known open thread, "
+        "send it again with resolved=true.\n\n"
+        f"{_format_known_journal(known_npcs, known_quests, known_threads)}"
         f"{location_context}"
         f"This turn:\n{narration_text}"
     )
@@ -1239,6 +1267,115 @@ def _log_turn_result(label: str, text: str, state: dict, attrs: dict | None = No
     )
 
 
+# --- "Director" layer: pacing, variety and callbacks -----------------------
+
+import random
+
+SITUATION_TYPES = {
+    "danger": "a sudden threat or tense confrontation that forces a reaction",
+    "dialogue": "a meaningful conversation with someone who wants something from the character",
+    "puzzle": "an obstacle or mystery that rewards clever thinking rather than force",
+    "discovery": "finding something unexpected - a clue, a place, an object, a secret",
+    "quiet": "a calmer beat - travel, rest, a human or atmospheric detail that builds the world",
+    "dilemma": "a hard choice between two things the character cares about, with no clean answer",
+    "complication": "something that seemed fine goes wrong, or a plan meets an unexpected obstacle",
+}
+
+# (turn_count upper bound exclusive, act number, what the act is for)
+ACT_PLAN = [
+    (6, 1, "SETUP: establish the world, the stakes and the first hook; let the character act."),
+    (14, 2, "COMPLICATION: the first plan is not enough; new obstacles, allies or enemies appear, and the stakes become clearer."),
+    (22, 3, "TURN: a revelation or reversal changes what the character thought was going on."),
+    (30, 4, "CLIMAX BUILD: pressure peaks, threads converge, the main conflict becomes unavoidable."),
+    (10**9, 5, "RESOLUTION: bring the main conflict to a decisive, satisfying end and pay off open threads. If the climax has already been played, wrap up cleanly instead of starting new plotlines."),
+]
+
+
+def pick_situation(last: str | None = None) -> str:
+    """A random situation type for the coming turn, never the same one twice
+    in a row (last = the previous pick) — breaks the 'every scene looks the
+    same' monotony without hardcoding a rigid sequence."""
+    choices = [k for k in SITUATION_TYPES if k != last]
+    return random.choice(choices)
+
+
+def _act_for(turn_count: int) -> tuple[int, str]:
+    for bound, number, text in ACT_PLAN:
+        if turn_count < bound:
+            return number, text
+    return ACT_PLAN[-1][1], ACT_PLAN[-1][2]
+
+
+def build_director_note(
+    story_arc: str | None,
+    turn_count: int,
+    open_threads: list | None,
+    situation: str | None,
+) -> str:
+    """Extra private guidance appended to each ordinary story turn: where the
+    story is in its arc, what kind of beat to lean towards, which earlier
+    consequences are waiting to come back, and how to make the numbered
+    options meaningfully different. Not shown to the player."""
+    parts = []
+    if story_arc:
+        number, act_text = _act_for(turn_count)
+        parts.append(
+            "HIDDEN STORY PLAN (the player never sees this; steer toward it without announcing it, "
+            "and adapt it if the player's choices take the story elsewhere):\n"
+            f"{story_arc}\n"
+            f"Current position: act {number} of 5 - {act_text}"
+        )
+    if situation and situation in SITUATION_TYPES:
+        parts.append(
+            f"BEAT FOR THIS TURN (a gentle nudge, not an order - ignore it if the player's action "
+            f"is mid-conversation or mid-fight and the scene must simply continue): lean toward "
+            f"{SITUATION_TYPES[situation]}."
+        )
+    if open_threads:
+        listed = "; ".join(open_threads[-8:])
+        parts.append(
+            "OPEN THREADS from earlier choices: " + listed + ". Every few turns, when it fits "
+            "naturally, let ONE of these return with a consequence (a debt collected, a spared "
+            "enemy back, a promise remembered). Do not force them all at once."
+        )
+    parts.append(
+        "OPTION VARIETY: the numbered options must be genuinely different approaches, not three "
+        "versions of the same action. Where the scene allows, cover different styles - a careful "
+        "or defensive choice, a bold or risky one, a clever or social one - and make one of them "
+        "something the player would not expect. Each option should hint at what it risks or costs."
+    )
+    return "\n\n".join(parts)
+
+
+async def generate_story_arc(opening_text: str, language_name: str, party: bool = False) -> str:
+    """One-time hidden 5-act outline for the adventure, written right after
+    the opening scene so later turns have a direction (setup, complication,
+    turn, climax, resolution) instead of improvising forever. Never raises -
+    returns "" on any failure, and the game simply plays without a plan."""
+    prompt = (
+        f"Respond in: {language_name}.\n\n"
+        "For THIS response only, ignore the numbered-options rule - write ONLY the outline "
+        "described below and nothing else.\n\n"
+        "Below is the opening scene of a new interactive adventure"
+        + (" for a party of several player characters" if party else "")
+        + ". Write a SECRET outline the narrator will follow: exactly 5 lines, "
+        "'Act 1' to 'Act 5' (setup, complication, turn/revelation, climax, resolution), one "
+        "sentence each. Include a clear central conflict, a concrete antagonist or force, what is "
+        "at stake, one surprising revelation, and a satisfying ending. Tie it closely to the "
+        "characters, places and situation of the opening. Stay flexible: it describes "
+        "what is likely, not what must happen.\n\n"
+        f"Opening scene:\n{opening_text}"
+    )
+    try:
+        model = get_model(with_tools=False)
+        response = await _generate_ensuring_narration(model, prompt)
+        text = _extract_text(response).strip()
+    except Exception:
+        logger.exception("Story arc generation failed; continuing without a hidden plan")
+        return ""
+    return text[:1500]
+
+
 async def generate_story_turn(
     summary: str,
     recent_turns: list[str],
@@ -1251,6 +1388,10 @@ async def generate_story_turn(
     current_location_name: str | None = None,
     known_npcs: dict | None = None,
     known_quests: dict | None = None,
+    story_arc: str | None = None,
+    turn_count: int = 0,
+    open_threads: list | None = None,
+    situation: str | None = None,
     soften: bool = False,
 ) -> tuple[str, dict, dict]:
     """Generate one ordinary story turn: narration + options, plus the
@@ -1288,6 +1429,7 @@ async def generate_story_turn(
         f"CURRENT STATE (for context only, so the narration stays realistic — e.g. low funds, a "
         f"wounded character; you do not need to report it back in this reply): {state_line}\n\n"
         f"Player's action now: {player_input}\n\n"
+        f"{build_director_note(story_arc, turn_count, open_threads, situation)}\n\n"
         f"{NO_INLINE_STATE_NOTE}"
     )
     if acting_name:
@@ -1300,7 +1442,7 @@ async def generate_story_turn(
     clean_text, _ = parse_state_tag(text)  # defensive: strip a stray legacy tag if one appears
     state = await _extract_turn_state(clean_text, player_input, character, language_name)
     journal = await _extract_turn_journal(
-        clean_text, language_name, current_location_name, known_npcs, known_quests
+        clean_text, language_name, current_location_name, known_npcs, known_quests, open_threads
     )
     _log_turn_result("generate_story_turn", clean_text, state, journal=journal)
     return clean_text, state, journal
