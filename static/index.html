@@ -194,7 +194,12 @@
     border-radius: 10px;
     background: var(--card);
     color: var(--hint);
-    font-size: 14px;
+    font-family: var(--font-heading);
+    font-size: 13px;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     cursor: pointer;
   }
   .tab-btn.active {
@@ -556,51 +561,61 @@
     background: var(--bg);
     color: var(--hint);
   }
-  /* --- Schematic location map (graph of visited places, see renderLocationMap) --- */
+  /* --- Compact location map (tree of name chips, see renderLocationTree) --- */
   .loc-map-hint {
     font-size: 12px;
     color: var(--hint);
     margin-bottom: 8px;
   }
-  .loc-map-wrap {
-    width: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
-    margin-bottom: 14px;
-    border-radius: 12px;
-    background: var(--card);
-    padding: 6px 0;
+  .loc-tree {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 14px;
+    border-left: 1.5px solid var(--hint);
+    border-left-color: color-mix(in srgb, var(--hint) 55%, transparent);
   }
-  .loc-map-wrap svg { display: block; }
-  .loc-map-edge {
-    stroke: var(--hint);
-    stroke-width: 1.5;
-    opacity: 0.55;
+  .loc-tree-root { padding-left: 0; border-left: none; }
+  .loc-tree li {
+    position: relative;
+    padding: 4px 0 4px 12px;
   }
-  .loc-map-node-circle {
-    fill: var(--bg);
-    stroke: var(--hint);
-    stroke-width: 1.5;
+  .loc-tree-root > li { padding-left: 0; }
+  .loc-tree li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 19px;
+    width: 10px;
+    border-top: 1.5px solid color-mix(in srgb, var(--hint) 55%, transparent);
+  }
+  .loc-tree-root > li::before { display: none; }
+  .loc-node { display: inline-block; max-width: 100%; }
+  .loc-chip {
+    font-family: var(--font-heading);
+    font-size: 13px;
+    padding: 5px 11px;
+    border-radius: 10px;
+    border: 1.5px solid var(--hint);
+    background: var(--bg);
+    color: var(--text);
     cursor: pointer;
+    text-align: left;
+    max-width: 100%;
   }
-  .loc-map-node.current .loc-map-node-circle {
-    fill: var(--attr);
-    stroke: var(--attr);
-    opacity: 0.9;
-  }
-  .loc-map-node.selected .loc-map-node-circle {
-    stroke: var(--attr);
-    stroke-width: 2.5;
-  }
-  .loc-map-node-label {
-    font-size: 10px;
-    fill: var(--text);
-    text-anchor: middle;
-    pointer-events: none;
-  }
-  .loc-map-node.current .loc-map-node-label {
-    fill: var(--btn-text);
+  .loc-node.open .loc-chip { border-color: var(--attr); }
+  .loc-node.current .loc-chip {
+    background: var(--attr);
+    border-color: var(--attr);
+    color: var(--btn-text);
     font-weight: 700;
+  }
+  .loc-desc {
+    font-size: 13px;
+    color: var(--hint);
+    margin: 5px 2px 2px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--card);
   }
   .npc-card, .quest-card {
     padding: 12px 14px;
@@ -914,7 +929,7 @@ let lastJournal = {};
 // Which location-map node is currently tapped open (shows its description
 // below the map) — resets to the character's current location by default
 // each time the journal re-renders with a different one.
-let selectedMapLocation = null;
+let expandedLocations = new Set(); // visited-location chips the player has tapped open
 let diceInterval = null;
 let currentThemeIcon = "";
 let useCategoryTheme = localStorage.getItem("useCategoryTheme") !== "false"; // default: on
@@ -1140,43 +1155,13 @@ function renderLocationsPanel(j) {
     return;
   }
   const currentName = j.location ? j.location.name : null;
-  // Default the open detail card to wherever the party currently is, the
-  // first time there's something to show.
-  if (selectedMapLocation == null && currentName) selectedMapLocation = currentName;
 
   let html = "";
   if (graph.length) {
     html += `<div class="loc-map-hint">${escapeHtml(t("tap_location_hint"))}</div>`;
-    html += renderLocationMapSvg(graph, currentName);
-  }
-
-  // Delegated click handler, bound once to this (stable) container rather
-  // than as inline onclick="" attributes on the SVG nodes themselves — the
-  // nodes get replaced on every re-render (innerHTML below), but inline
-  // onclick on dynamically-injected SVG <g> elements turned out unreliable
-  // in Telegram's WebView, so this binds to locationsEl itself (which is
-  // never replaced, only its contents) and reads which node was tapped from
-  // its data-name attribute via event delegation instead.
-  if (!locationsEl.dataset.mapClickBound) {
-    locationsEl.addEventListener("click", (e) => {
-      const node = e.target.closest(".loc-map-node");
-      if (node && node.dataset.name) selectMapLocation(node.dataset.name);
-    });
-    locationsEl.dataset.mapClickBound = "1";
-  }
-
-  // Detail card for whichever node is selected (falls back to the current
-  // location's own card if nothing in location_graph matched, e.g. very old
-  // save data from before location_graph existed).
-  const selected = graph.find(n => n.name === selectedMapLocation);
-  if (selected) {
-    html += `
-      <div class="location-card">
-        <div class="location-name">${selected.name === currentName ? "📍 " : ""}${escapeHtml(selected.name)}</div>
-        ${selected.description ? `<div class="location-desc">${escapeHtml(selected.description)}</div>` : ""}
-      </div>
-    `;
+    html += renderLocationTree(graph, currentName);
   } else if (j.location) {
+    // Very old save data from before location_graph existed.
     html += `
       <div class="location-card">
         <div class="location-name">📍 ${escapeHtml(j.location.name || "")}</div>
@@ -1184,22 +1169,35 @@ function renderLocationsPanel(j) {
       </div>
     `;
   }
+
+  // Delegated click handler, bound once to this (stable) container: its
+  // contents are replaced on every render, and inline onclick="" on
+  // dynamically-built markup proved unreliable in Telegram's WebView.
+  if (!locationsEl.dataset.mapClickBound) {
+    locationsEl.addEventListener("click", (e) => {
+      const chip = e.target.closest(".loc-chip");
+      if (chip && chip.dataset.name) toggleMapLocation(chip.dataset.name);
+    });
+    locationsEl.dataset.mapClickBound = "1";
+  }
   locationsEl.innerHTML = html;
 }
 
-function selectMapLocation(name) {
-  selectedMapLocation = name;
+function toggleMapLocation(name) {
+  if (expandedLocations.has(name)) expandedLocations.delete(name);
+  else expandedLocations.add(name);
   renderJournal();
 }
 
-// Lays out location_graph (a flat list of {name, description, connected_from})
-// as a simple top-down tree: each node's parent is the location it was
-// connected_from; nodes with no known/matching parent become their own
-// root. Leaves get sequential x slots left-to-right; a parent is centered
-// over the average x of its children. Returns {nodes, maxX, maxDepth}
-// with each node annotated with .x/.depth, or null if nothing to draw.
-function layoutLocationGraph(graph) {
-  if (!graph.length) return null;
+// Compact map of visited locations: a nested tree where every place is a
+// small framed name chip (tap to unfold its description) and the lines
+// between them show which place was reached from which (location_graph's
+// "connected_from", see core.py's apply_journal_update). The party's
+// current location is always unfolded, with its description. Deliberately
+// not a geographic map: Gemini can't keep directions or art style
+// consistent across separate turns, and a node-and-line SVG took too much
+// space once the adventure had many places.
+function renderLocationTree(graph, currentName) {
   const byName = {};
   graph.forEach(n => { byName[n.name] = { ...n, children: [] }; });
   const roots = [];
@@ -1209,68 +1207,30 @@ function layoutLocationGraph(graph) {
     if (parent) parent.children.push(n);
     else roots.push(n);
   });
-  let xCounter = 0;
-  const place = (n, depth, seen) => {
-    // seen guards against a malformed cycle (shouldn't happen given how
-    // connected_from is written, but never trust model output blindly).
-    if (seen.has(n.name)) { n.depth = depth; n.x = xCounter++; return; }
+
+  // `seen` guards against a malformed cycle in connected_from.
+  const renderNode = (n, seen) => {
+    if (seen.has(n.name)) return "";
     seen.add(n.name);
-    n.depth = depth;
-    if (!n.children.length) {
-      n.x = xCounter++;
-    } else {
-      n.children.forEach(c => place(c, depth + 1, seen));
-      n.x = n.children.reduce((sum, c) => sum + c.x, 0) / n.children.length;
-    }
-  };
-  roots.forEach(r => place(r, 0, new Set()));
-  const nodes = Object.values(byName);
-  const maxX = Math.max(...nodes.map(n => n.x));
-  const maxDepth = Math.max(...nodes.map(n => n.depth));
-  return { nodes, maxX, maxDepth };
-}
-
-function renderLocationMapSvg(graph, currentName) {
-  const layout = layoutLocationGraph(graph);
-  if (!layout) return "";
-  const xSpacing = 86, ySpacing = 64, pad = 40, r = 22;
-  const width = (layout.maxX + 1) * xSpacing + pad;
-  const height = (layout.maxDepth + 1) * ySpacing + pad;
-  const cx = n => pad / 2 + n.x * xSpacing + xSpacing / 2;
-  const cy = n => pad / 2 + n.depth * ySpacing + ySpacing / 2;
-
-  let edges = "";
-  layout.nodes.forEach(n => {
-    if (n.connected_from) {
-      const parent = layout.nodes.find(p => p.name === n.connected_from);
-      if (parent) {
-        edges += `<line class="loc-map-edge" x1="${cx(parent)}" y1="${cy(parent)}" x2="${cx(n)}" y2="${cy(n)}" />`;
-      }
-    }
-  });
-
-  let nodesHtml = "";
-  layout.nodes.forEach(n => {
     const isCurrent = n.name === currentName;
-    const isSelected = n.name === selectedMapLocation;
-    const label = n.name.length > 14 ? n.name.slice(0, 13) + "…" : n.name;
-    const cls = ["loc-map-node", isCurrent ? "current" : "", isSelected ? "selected" : ""].filter(Boolean).join(" ");
-    nodesHtml += `
-      <g class="${cls}" data-name="${escapeAttr(n.name)}">
-        <circle class="loc-map-node-circle" cx="${cx(n)}" cy="${cy(n)}" r="${r}"></circle>
-        <text class="loc-map-node-label" x="${cx(n)}" y="${cy(n) + r + 12}">${escapeHtml(label)}</text>
-      </g>
+    const isOpen = isCurrent || expandedLocations.has(n.name);
+    const cls = ["loc-node", isCurrent ? "current" : "", isOpen ? "open" : ""].filter(Boolean).join(" ");
+    const desc = isOpen && n.description
+      ? `<div class="loc-desc">${escapeHtml(n.description)}</div>` : "";
+    const kids = n.children.length
+      ? `<ul class="loc-tree">${n.children.map(c => renderNode(c, seen)).join("")}</ul>` : "";
+    return `
+      <li>
+        <div class="${cls}">
+          <button type="button" class="loc-chip" data-name="${escapeAttr(n.name)}">${isCurrent ? "📍 " : ""}${escapeHtml(n.name)}</button>
+          ${desc}
+        </div>
+        ${kids}
+      </li>
     `;
-  });
-
-  return `
-    <div class="loc-map-wrap">
-      <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-        ${edges}
-        ${nodesHtml}
-      </svg>
-    </div>
-  `;
+  };
+  const seen = new Set();
+  return `<ul class="loc-tree loc-tree-root">${roots.map(r => renderNode(r, seen)).join("")}</ul>`;
 }
 
 function openMenu() {
@@ -1955,7 +1915,7 @@ function showWizardError(data) {
 
 function startOnboarding() {
   cameFromActiveGame = false;
-  selectedMapLocation = null;
+  expandedLocations.clear();
   wizard = {
     language: null, uiStrings: null, category: null, worldDescription: null,
     characterDescription: null, gender: null, age: null, currentPreview: null,
