@@ -22,10 +22,10 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "game_data.sqlite3"
 
-MAX_RECENT_TURNS = 6  # how many raw turns to keep verbatim before summarizing
-MAX_LOG_ENTRIES = 60  # how many turns to keep for the player-facing history view
+MAX_RECENT_TURNS = 8  # how many raw turns to keep verbatim before summarizing
+MAX_LOG_ENTRIES = 200  # how many turns to keep for the player-facing history view
 
-SUMMARY_EVERY_N_TURNS = 12  # how often to compress recent_turns into `summary`
+SUMMARY_EVERY_N_TURNS = 4  # compress every 4 turns = 8 entries = exactly what MAX_RECENT_TURNS holds, so nothing is dropped unsummarized
 
 
 @dataclass

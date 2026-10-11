@@ -485,8 +485,12 @@ Follow these rules on every reply:
    detail (sounds, tech, architecture, clothing) that a reader would only \
    see in THIS genre, not a generic one.
 
-4. Briefly (3-6 sentences) describe the outcome of the player's last action \
-   and the current scene. When a scene naturally involves talking to an NPC, \
+4. Describe the outcome of the player's last action and the current scene \
+   with vivid, specific detail (usually 6-10 sentences; shorter only for a \
+   quick exchange, longer for important story moments): what the character \
+   sees, hears and feels, what the people involved do and want, and what \
+   changed because of the action. Prefer concrete details and consequences \
+   over generic summary. When a scene naturally involves talking to an NPC, \
    bring it to life with a short line or two of actual spoken dialogue in \
    quotes (not every turn — only when a conversation is genuinely happening) \
    instead of just summarizing what was said.
@@ -521,6 +525,20 @@ Follow these rules on every reply:
    except after many turns of accumulated, ignored danger. If wounded \
    (HP below ~45%) or critically wounded (below ~20%), reflect this mildly \
    in narration without shutting down the player's options.
+
+7b. COMBAT PACING: do not resolve a fight in a single reply. A fight is a \
+   sequence of rounds: each reply covers ONE exchange (the character's move, \
+   the enemy's response, how the situation shifted) and then offers fresh \
+   options. Ordinary fights last about 3-5 rounds; STORY fights (a boss, a \
+   rival, an ambush that matters to the plot, any climax) last about 6-10 \
+   rounds. Make them dynamic: enemies use different tactics and adapt to \
+   what the character does, the environment matters (terrain, hazards, \
+   cover, things to use or break), the tide turns at least once, and a long \
+   fight can have phases (the enemy changes form, reinforcements arrive, the \
+   goal shifts from killing to escaping or protecting). Keep tension through \
+   choices, not just damage; apply the HP rule above, so a long fight is \
+   dangerous but never an unavoidable death. End a fight when the story \
+   calls for it with a clear, earned outcome.
 
 8. OPTIONS: always end with a numbered list of 2-4 action options. Each \
    option MUST start with the digit followed by a closing parenthesis and a \
@@ -1283,10 +1301,10 @@ SITUATION_TYPES = {
 
 # (turn_count upper bound exclusive, act number, what the act is for)
 ACT_PLAN = [
-    (6, 1, "SETUP: establish the world, the stakes and the first hook; let the character act."),
-    (14, 2, "COMPLICATION: the first plan is not enough; new obstacles, allies or enemies appear, and the stakes become clearer."),
-    (22, 3, "TURN: a revelation or reversal changes what the character thought was going on."),
-    (30, 4, "CLIMAX BUILD: pressure peaks, threads converge, the main conflict becomes unavoidable."),
+    (10, 1, "SETUP: establish the world, the stakes and the first hook; let the character explore, meet people and make first choices. Take your time - no rush to the main conflict."),
+    (26, 2, "COMPLICATION: the first plan is not enough; new obstacles, allies, enemies and side developments appear, and the stakes become clearer. Let subplots and relationships grow."),
+    (42, 3, "TURN: a revelation or reversal changes what the character thought was going on; the true nature of the conflict emerges."),
+    (58, 4, "CLIMAX BUILD: pressure peaks, threads converge, the main conflict becomes unavoidable. Story-critical fights belong here."),
     (10**9, 5, "RESOLUTION: bring the main conflict to a decisive, satisfying end and pay off open threads. If the climax has already been played, wrap up cleanly instead of starting new plotlines."),
 ]
 
@@ -1324,6 +1342,11 @@ def build_director_note(
             "and adapt it if the player's choices take the story elsewhere):\n"
             f"{story_arc}\n"
             f"Current position: act {number} of 5 - {act_text}"
+        )
+    if story_arc and 3 <= _act_for(turn_count)[0] <= 4:
+        parts.append(
+            "STORY FIGHTS: if a fight happens now, treat it as a story-critical one - spread it over "
+            "many rounds (about 6-10), with phases, a turning point and the stakes of the plot on the line."
         )
     if situation and situation in SITUATION_TYPES:
         parts.append(
@@ -1696,7 +1719,7 @@ async def generate_summary(existing_summary: str, recent_turns: list[str], langu
     prompt."""
     prompt = (
         f"Respond in: {language_name}.\n\n"
-        "Summarize this adventure so far in 3-5 concise sentences. Preserve important "
+        "Summarize this adventure so far in 6-10 sentences. Preserve important "
         "ongoing facts: key plot points, relationships, notable injuries, and anything about "
         "the character's money or inventory that matters going forward. Combine the previous "
         "summary with the recent events below into one updated summary — do not just append, "
